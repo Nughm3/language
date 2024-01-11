@@ -1,0 +1,13 @@
+[package]
+name = "language"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ariadne = "0.4.0"
+chumsky = "0.9.3"
+id-arena = "2.2.1"
+internment = { version = "0.7.4", features = ["ahash"] }
+logos = "0.13.0"
+ordered-float = "4.2.0"
+thiserror = "1.0.56"
