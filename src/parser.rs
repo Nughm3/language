@@ -1,39 +1,55 @@
-use chumsky::prelude::{Parser as _, *};
+use chumsky::{
+    input::{Input as _, Stream, ValueInput},
+    prelude::{Parser as _, *},
+};
 use internment::Intern;
-use token::Token::{self, *};
 
-use crate::{ast::*, codemap::FileId, span::Span};
+use crate::{
+    ast::*,
+    codemap::FileId,
+    span::Span,
+    token::Token::{self, *},
+};
 
-mod token;
+pub fn parse(file_id: FileId, input: &str) -> ParseResult<File, Rich<'_, Token, Span>> {
+    let eoi = {
+        let len = input.len() as u32;
+        Span::new(file_id, len, len + 1)
+    };
 
-pub type ParseError = Simple<Token, Span>;
+    let tokens = Token::lexer(file_id, input);
+    let stream = Stream::from_iter(tokens).spanned(eoi);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedFile {
-    pub ast: Option<File>,
-    pub errors: Vec<ParseError>,
+    file().parse(stream)
 }
 
-pub fn parse(file_id: FileId, input: &str) -> ParsedFile {
-    let (ast, errors) = file().parse_recovery(Token::stream(file_id, input));
-    ParsedFile { ast, errors }
-}
+type Extra<'a> = extra::Err<Rich<'a, Token, Span>>;
+trait Input<'a>: ValueInput<'a, Token = Token, Span = Span> {}
+impl<'a, I: ValueInput<'a, Token = Token, Span = Span>> Input<'a> for I {}
+trait Parser<'a, I: Input<'a>, T>: chumsky::Parser<'a, I, T, Extra<'a>> + Clone {}
+impl<'a, I: Input<'a>, T, P: chumsky::Parser<'a, I, T, Extra<'a>> + Clone> Parser<'a, I, T> for P {}
 
-trait Parser<T>: chumsky::Parser<Token, T, Error = ParseError> + Clone {}
-impl<T, P: chumsky::Parser<Token, T, Error = ParseError> + Clone> Parser<T> for P {}
-
-fn file() -> impl Parser<File> {
+fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
     item()
         .repeated()
+        .collect()
         .then_ignore(end())
         .map(|items| File { items })
 }
 
-fn item() -> impl Parser<Item> {
-    todo()
+fn item<'a, I: Input<'a>>() -> impl Parser<'a, I, Item> {
+    choice((
+        import().map(Item::Import),
+        type_alias().map(Item::TypeAlias),
+        struct_().map(Item::Struct),
+        enum_().map(Item::Enum),
+        function().map(Item::Function),
+        binding(ConstKw).map(Item::Constant),
+    ))
+    .boxed()
 }
 
-fn import() -> impl Parser<Import> {
+fn import<'a, I: Input<'a>>() -> impl Parser<'a, I, Import> {
     recursive(|import| {
         let options = just(AsKw)
             .ignore_then(ident())
@@ -49,6 +65,7 @@ fn import() -> impl Parser<Import> {
         let group = import
             .separated_by(just(Comma))
             .allow_trailing()
+            .collect()
             .delimited_by(just(LeftBrace), just(RightBrace))
             .map(Import::Group);
 
@@ -60,7 +77,7 @@ fn import() -> impl Parser<Import> {
     })
 }
 
-fn type_alias() -> impl Parser<TypeAlias> {
+fn type_alias<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeAlias> {
     just(TypeKw)
         .ignore_then(type_expr())
         .then_ignore(just(Equals))
@@ -69,14 +86,14 @@ fn type_alias() -> impl Parser<TypeAlias> {
         .map(|(lhs, rhs)| TypeAlias { lhs, rhs })
 }
 
-fn struct_() -> impl Parser<Struct> {
+fn struct_<'a, I: Input<'a>>() -> impl Parser<'a, I, Struct> {
     just(StructKw)
         .ignore_then(type_expr())
         .then(variant(type_expr()))
         .then(just(Semicolon).or_not())
         .try_map(|((ty, body), semicolon), span| {
             if matches!(body, Variant::Unit | Variant::Tuple(_)) && semicolon.is_none() {
-                Err(ParseError::custom(
+                Err(Rich::custom(
                     span,
                     "struct variant requires a semicolon: ';'",
                 ))
@@ -86,7 +103,7 @@ fn struct_() -> impl Parser<Struct> {
         })
 }
 
-fn enum_() -> impl Parser<Enum> {
+fn enum_<'a, I: Input<'a>>() -> impl Parser<'a, I, Enum> {
     just(EnumKw)
         .ignore_then(type_expr())
         .then(
@@ -94,16 +111,18 @@ fn enum_() -> impl Parser<Enum> {
                 .then(variant(type_expr()))
                 .separated_by(just(Comma))
                 .allow_trailing()
+                .collect()
                 .delimited_by(just(LeftBrace), just(LeftBrace)),
         )
         .map(|(ty, variants)| Enum { ty, variants })
 }
 
-fn variant<T>(p: impl Parser<T>) -> impl Parser<Variant<T>> {
+fn variant<'a, I: Input<'a>, T>(p: impl Parser<'a, I, T>) -> impl Parser<'a, I, Variant<T>> {
     let tuple = p
         .clone()
         .separated_by(just(Comma))
         .allow_trailing()
+        .collect()
         .delimited_by(just(LeftParen), just(RightParen))
         .map(Variant::Tuple);
 
@@ -112,6 +131,7 @@ fn variant<T>(p: impl Parser<T>) -> impl Parser<Variant<T>> {
         .then(p)
         .separated_by(just(Comma))
         .allow_trailing()
+        .collect()
         .delimited_by(just(LeftBrace), just(RightBrace))
         .map(Variant::Record);
 
@@ -121,7 +141,7 @@ fn variant<T>(p: impl Parser<T>) -> impl Parser<Variant<T>> {
         .map(|variant| variant.unwrap_or(Variant::Unit))
 }
 
-fn type_expr() -> impl Parser<TypeExpr> {
+fn type_expr<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeExpr> {
     recursive(|type_expr| {
         let primitive = select! {
             IntTy => TypeExpr::Int,
@@ -136,6 +156,7 @@ fn type_expr() -> impl Parser<TypeExpr> {
                 type_expr
                     .separated_by(just(Comma))
                     .allow_trailing()
+                    .collect()
                     .delimited_by(just(LeftBracket), just(RightBracket))
                     .or_not(),
             )
@@ -145,10 +166,11 @@ fn type_expr() -> impl Parser<TypeExpr> {
     })
 }
 
-fn function() -> impl Parser<Function> {
+fn function<'a, I: Input<'a>>() -> impl Parser<'a, I, Function> {
     let generics = type_expr()
         .separated_by(just(Comma))
         .allow_trailing()
+        .collect()
         .delimited_by(just(LeftBracket), just(RightBracket));
 
     let params = ident()
@@ -156,6 +178,7 @@ fn function() -> impl Parser<Function> {
         .then(type_expr())
         .separated_by(just(Comma))
         .allow_trailing()
+        .collect()
         .delimited_by(just(LeftParen), just(RightParen));
 
     let return_ty = just(Arrow).ignore_then(type_expr());
@@ -175,7 +198,7 @@ fn function() -> impl Parser<Function> {
         })
 }
 
-fn binding(start_token: Token) -> impl Parser<Binding> {
+fn binding<'a, I: Input<'a>>(start_token: Token) -> impl Parser<'a, I, Binding> {
     just(start_token)
         .ignore_then(ident())
         .then(just(Colon).ignore_then(type_expr()).or_not())
@@ -185,21 +208,35 @@ fn binding(start_token: Token) -> impl Parser<Binding> {
         .map(|((name, ty), value)| Binding { name, ty, value })
 }
 
-fn block() -> impl Parser<Block> {
+fn block<'a, I: Input<'a>>() -> impl Parser<'a, I, Block> {
     stmt()
         .repeated()
+        .collect()
         .then(expr().map(Box::new).or_not())
         .delimited_by(just(LeftBrace), just(RightBrace))
         .map(|(stmts, tail)| Block { stmts, tail })
 }
 
-fn stmt() -> impl Parser<Stmt> {
-    let expr_stmt = expr().then_ignore(just(Semicolon)).map(Stmt::Expr);
+fn stmt<'a, I: Input<'a>>() -> impl Parser<'a, I, Stmt> {
+    let expr_stmt = expr()
+        .then(just(Semicolon).or_not())
+        .try_map(|(expr, semicolon), span| {
+            if !matches!(
+                expr,
+                Expr::Block(_) | Expr::If { .. } | Expr::Loop(_) | Expr::While { .. }
+            ) && semicolon.is_none()
+            {
+                Err(Rich::custom(span, "expected semicolon: ';'"))
+            } else {
+                Ok(Stmt::Expr(expr))
+            }
+        });
     let let_stmt = binding(LetKw).map(Stmt::Let);
-    let break_stmt = just(BreakKw).to(Stmt::Break);
-    let continue_stmt = just(ContinueKw).to(Stmt::Continue);
+    let break_stmt = just(BreakKw).then(just(Semicolon)).to(Stmt::Break);
+    let continue_stmt = just(ContinueKw).then(just(Semicolon)).to(Stmt::Continue);
     let return_stmt = just(ReturnKw)
         .ignore_then(expr().or_not())
+        .then_ignore(just(Semicolon))
         .map(Stmt::Return);
     let item_stmt = item().map(Stmt::Item);
 
@@ -213,12 +250,7 @@ fn stmt() -> impl Parser<Stmt> {
     ))
 }
 
-fn expr() -> impl Parser<Expr> {
-    expr_rec(true)
-}
-
-// FIXME: we need an alpha version of chumsky to keep state
-fn expr_rec(parse_structs: bool) -> impl Parser<Expr> {
+fn expr<'a, I: Input<'a>>() -> impl Parser<'a, I, Expr> {
     recursive(|expr| {
         let expr_boxed = expr.clone().map(Box::new);
 
@@ -250,41 +282,24 @@ fn expr_rec(parse_structs: bool) -> impl Parser<Expr> {
             .then(block())
             .map(|(condition, body)| Expr::While { condition, body });
 
-        let paren_expr = expr
+        let paren = expr
             .clone()
             .delimited_by(just(LeftParen), just(RightParen))
             .map(|expr| Expr::Paren(Box::new(expr)));
 
-        let index_expr = expr_boxed
-            .clone()
-            .then(
-                expr_boxed
-                    .clone()
-                    .delimited_by(just(LeftBracket), just(RightBracket)),
-            )
-            .map(|(expr, index)| Expr::Index { expr, index });
-
-        let call_expr = expr_boxed
-            .clone()
-            .then(
-                expr.clone()
-                    .separated_by(just(Comma))
-                    .allow_trailing()
-                    .delimited_by(just(LeftParen), just(RightParen)),
-            )
-            .map(|(function, args)| Expr::Call { function, args });
-
-        let tuple_expr = expr
+        let tuple = expr
             .clone()
             .separated_by(just(Comma))
             .allow_trailing()
+            .collect()
             .delimited_by(just(LeftParen), just(RightParen))
             .map(Expr::Tuple);
 
-        let array_expr = expr
+        let array = expr
             .clone()
             .separated_by(just(Comma))
             .allow_trailing()
+            .collect()
             .delimited_by(just(LeftBracket), just(RightBracket))
             .map(Expr::Array);
 
@@ -298,46 +313,100 @@ fn expr_rec(parse_structs: bool) -> impl Parser<Expr> {
         }
         .or(path().map(Expr::Path));
 
-        let mut atom = choice((
+        let struct_literal = {
+            let field = ident().then_ignore(just(Colon)).then(expr.clone());
+
+            path()
+                .then(
+                    field
+                        .separated_by(just(Comma))
+                        .allow_trailing()
+                        .collect()
+                        .delimited_by(just(LeftBrace), just(RightBrace)),
+                )
+                .map(|(name, fields)| Expr::StructLiteral { name, fields })
+        };
+
+        let call = expr_boxed
+            .clone()
+            .then(
+                expr.clone()
+                    .separated_by(just(Comma))
+                    .allow_trailing()
+                    .collect()
+                    .delimited_by(just(LeftParen), just(RightParen)),
+            )
+            .map(|(function, args)| Expr::Call { function, args });
+
+        let index = expr_boxed
+            .clone()
+            .then(
+                expr_boxed
+                    .clone()
+                    .delimited_by(just(LeftBracket), just(RightBracket)),
+            )
+            .map(|(expr, index)| Expr::Index { expr, index });
+
+        let atom = choice((
             block_expr,
             if_expr,
             loop_expr,
             while_expr,
-            paren_expr,
-            index_expr,
-            call_expr,
-            tuple_expr,
-            array_expr,
+            paren,
+            tuple,
+            array,
             primitive_literal,
-        ))
-        .boxed();
+            struct_literal,
+            call,
+            index,
+        ));
 
-        if parse_structs {
-            let struct_literal = {
-                let field = ident().then_ignore(just(Colon)).then(expr.clone());
+        atom.pratt({
+            use chumsky::pratt::*;
 
-                path()
-                    .then(
-                        field
-                            .separated_by(just(Comma))
-                            .allow_trailing()
-                            .delimited_by(just(LeftBrace), just(RightBrace)),
-                    )
-                    .map(|(name, fields)| Expr::StructLiteral { name, fields })
+            let prefix = |bp, op: Token| {
+                prefix(bp, just(op), move |expr| Expr::Prefix {
+                    op: op.into(),
+                    expr: Box::new(expr),
+                })
             };
 
-            atom = atom.or(struct_literal).boxed();
-        }
+            let infix = |assoc, op: Token| {
+                infix(assoc, just(op), move |lhs, rhs| Expr::Infix {
+                    lhs: Box::new(lhs),
+                    op: op.into(),
+                    rhs: Box::new(rhs),
+                })
+            };
 
-        todo()
+            (
+                prefix(7, Minus),
+                prefix(7, Not),
+                infix(left(6), Star),
+                infix(left(6), Slash),
+                infix(left(6), Percent),
+                infix(left(5), Plus),
+                infix(left(5), Minus),
+                infix(left(4), Eq),
+                infix(left(4), Ne),
+                infix(left(4), Lt),
+                infix(left(4), Le),
+                infix(left(4), Gt),
+                infix(left(4), Ge),
+                infix(left(3), LogicAnd),
+                infix(left(2), LogicOr),
+                infix(right(1), Equals),
+            )
+        })
     })
 }
 
-fn path() -> impl Parser<Path> {
+fn path<'a, I: Input<'a>>() -> impl Parser<'a, I, Path> {
     ident()
         .separated_by(just(Dot))
         .at_least(1)
-        .map(|components| {
+        .collect()
+        .map(|components: Vec<_>| {
             let (name, prefix) = components.split_last().unwrap();
             Path {
                 prefix: prefix.to_vec(),
@@ -346,6 +415,6 @@ fn path() -> impl Parser<Path> {
         })
 }
 
-fn ident() -> impl Parser<Intern<str>> {
+fn ident<'a, I: Input<'a>>() -> impl Parser<'a, I, Intern<str>> {
     select! { Ident(i) => i }
 }

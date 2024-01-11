@@ -1,6 +1,5 @@
 use std::char::ParseCharError;
 
-use chumsky::Stream;
 use internment::Intern;
 use logos::Logos;
 use thiserror::Error;
@@ -71,6 +70,8 @@ pub enum Token {
 
     #[token("let")]
     LetKw,
+    #[token("const")]
+    ConstKw,
     #[token("if")]
     IfKw,
     #[token("else")]
@@ -135,52 +136,11 @@ impl Token {
             .spanned()
             .map(move |(result, range)| {
                 (
-                    result.unwrap_or_else(|e| Token::Error),
+                    // TODO: report the lexical error
+                    result.unwrap_or(Token::Error),
                     Span::new(file_id, range.start as u32, range.end as u32),
                 )
             })
-    }
-
-    pub fn stream(
-        file_id: FileId,
-        input: &str,
-    ) -> Stream<'_, Token, Span, impl Iterator<Item = (Token, Span)> + '_> {
-        let len = input.len() as u32;
-        Stream::from_iter(
-            Span::new(file_id, len, len + 1),
-            Token::lexer(file_id, input),
-        )
-    }
-}
-
-impl From<Token> for PrefixOp {
-    fn from(token: Token) -> Self {
-        match token {
-            Token::Not => PrefixOp::Not,
-            Token::Minus => PrefixOp::Negate,
-            err => panic!("invalid unary operator: {err:?}"),
-        }
-    }
-}
-
-impl From<Token> for InfixOp {
-    fn from(token: Token) -> Self {
-        match token {
-            Token::Plus => InfixOp::Add,
-            Token::Minus => InfixOp::Sub,
-            Token::Star => InfixOp::Mul,
-            Token::Slash => InfixOp::Div,
-            Token::Percent => InfixOp::Rem,
-            Token::LogicAnd => InfixOp::LogicAnd,
-            Token::LogicOr => InfixOp::LogicOr,
-            Token::Eq => InfixOp::Eq,
-            Token::Ne => InfixOp::Ne,
-            Token::Lt => InfixOp::Lt,
-            Token::Le => InfixOp::Le,
-            Token::Gt => InfixOp::Gt,
-            Token::Ge => InfixOp::Ge,
-            err => panic!("invalid binary operator: {err:?}"),
-        }
     }
 }
 
@@ -253,4 +213,36 @@ fn lex_string(mut s: &str) -> Result<StringLiteral, LexicalError> {
     } else {
         StringLiteral::Text(Intern::from(string.as_str()))
     })
+}
+
+impl From<Token> for PrefixOp {
+    fn from(token: Token) -> Self {
+        match token {
+            Token::Not => PrefixOp::Not,
+            Token::Minus => PrefixOp::Negate,
+            err => panic!("invalid unary operator: {err:?}"),
+        }
+    }
+}
+
+impl From<Token> for InfixOp {
+    fn from(token: Token) -> Self {
+        match token {
+            Token::Plus => InfixOp::Add,
+            Token::Minus => InfixOp::Sub,
+            Token::Star => InfixOp::Mul,
+            Token::Slash => InfixOp::Div,
+            Token::Percent => InfixOp::Rem,
+            Token::LogicAnd => InfixOp::LogicAnd,
+            Token::LogicOr => InfixOp::LogicOr,
+            Token::Eq => InfixOp::Eq,
+            Token::Ne => InfixOp::Ne,
+            Token::Lt => InfixOp::Lt,
+            Token::Le => InfixOp::Le,
+            Token::Gt => InfixOp::Gt,
+            Token::Ge => InfixOp::Ge,
+            Token::Equals => InfixOp::Assign,
+            err => panic!("invalid binary operator: {err:?}"),
+        }
+    }
 }

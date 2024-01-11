@@ -8,6 +8,7 @@ pub mod codemap;
 pub mod fs;
 pub mod parser;
 pub mod span;
+pub mod token;
 
 #[derive(Debug)]
 pub struct Compiler<F> {

@@ -78,7 +78,7 @@ impl fmt::Display for Span {
     }
 }
 
-impl chumsky::Span for Span {
+impl chumsky::span::Span for Span {
     type Context = FileId;
     type Offset = u32;
 

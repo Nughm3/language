@@ -12,7 +12,7 @@ pub enum Item {
     Struct(Struct),
     Enum(Enum),
     Function(Function),
-    Binding(Binding),
+    Constant(Binding),
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -193,4 +193,5 @@ pub enum InfixOp {
     Le,
     Gt,
     Ge,
+    Assign,
 }
