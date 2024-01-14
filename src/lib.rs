@@ -43,7 +43,7 @@ where
         let parse_result = parser::parse(root_id, self.codemap.text(root_id).unwrap());
 
         for error in parse_result.errors() {
-            eprintln!("parse error: {error:?}");
+            eprintln!("error: {error:?}");
         }
 
         if let Some(ast) = parse_result.output() {
