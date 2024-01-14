@@ -11,7 +11,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Logos)]
-#[logos(skip r"([ \n\r\t]|//.)+", error = LexicalError)]
+#[logos(skip r"([ \n\r\t]|//.*)+", error = LexicalError)]
 pub enum Token {
     #[token("(")]
     LeftParen,

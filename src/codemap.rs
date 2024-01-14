@@ -4,12 +4,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use id_arena::{Arena, Id};
+
 use crate::{fs::FileSystem, span::Span};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeMap<F> {
     fs: F,
-    files: Vec<File>,
+    files: Arena<File>,
     data: String,
 }
 
@@ -17,17 +19,16 @@ impl<F: FileSystem> CodeMap<F> {
     pub fn new(fs: F) -> Self {
         CodeMap {
             fs,
-            files: Vec::new(),
+            files: Arena::new(),
             data: String::new(),
         }
     }
 
-    pub fn insert(&mut self, path: impl AsRef<Path>) -> Result<FileId, F::Error> {
+    pub fn load(&mut self, path: impl AsRef<Path>) -> Result<FileId, F::Error> {
         let path = path.as_ref();
 
         let raw_content = self.fs.read(path)?;
-        let content = std::str::from_utf8(&raw_content).expect("invalid UTF-8 in file");
-        self.data.push_str(content);
+        let content = std::str::from_utf8(&raw_content).expect("file was not valid UTF-8");
 
         let file = File {
             path: path.to_path_buf(),
@@ -39,13 +40,12 @@ impl<F: FileSystem> CodeMap<F> {
                 .collect(),
         };
 
-        let id = FileId(self.files.len() as u32);
-        self.files.push(file);
-        Ok(id)
+        self.data.push_str(content);
+        Ok(self.files.alloc(file))
     }
 
-    pub fn get(&self, FileId(idx): FileId) -> Option<&File> {
-        self.files.get(idx as usize)
+    pub fn get(&self, id: FileId) -> Option<&File> {
+        self.files.get(id)
     }
 
     pub fn text(&self, id: FileId) -> Option<&str> {
@@ -67,10 +67,10 @@ impl<F: FileSystem> CodeMap<F> {
 }
 
 impl<F: FileSystem> Index<FileId> for CodeMap<F> {
-    type Output = str;
+    type Output = File;
 
     fn index(&self, id: FileId) -> &Self::Output {
-        self.text(id).expect("index out of bounds")
+        self.get(id).expect("index out of bounds")
     }
 }
 
@@ -82,8 +82,7 @@ impl<F: FileSystem> Index<Span> for CodeMap<F> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FileId(u32);
+pub type FileId = Id<File>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct File {
@@ -187,7 +186,7 @@ mod tests {
         let mut codemap = CodeMap::new(fs);
 
         for (idx, text) in texts.iter().enumerate() {
-            let id = codemap.insert(Path::new(&idx.to_string())).unwrap();
+            let id = codemap.load(Path::new(&idx.to_string())).unwrap();
             let file = codemap.get(id).unwrap();
             dbg!(&file.line_breaks);
 

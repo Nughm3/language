@@ -8,7 +8,8 @@ use std::{
 pub trait FileSystem {
     type Error: std::fmt::Debug + std::error::Error;
 
-    fn read(&mut self, path: &Path) -> Result<Vec<u8>, Self::Error>;
+    fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error>;
+    fn read_if_exists(&self, path: &Path) -> Option<Result<Vec<u8>, Self::Error>>;
     fn write(&mut self, path: &Path, contents: &[u8]) -> Result<(), Self::Error>;
 }
 
@@ -34,11 +35,15 @@ impl LocalFs {
 impl FileSystem for LocalFs {
     type Error = Error;
 
-    fn read(&mut self, path: &Path) -> Result<Vec<u8>, Self::Error> {
+    fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error> {
         let mut file = File::open(self.root.join(path))?;
         let mut buf = Vec::with_capacity(file.metadata()?.len() as usize);
         file.read_to_end(&mut buf)?;
         Ok(buf)
+    }
+
+    fn read_if_exists(&self, path: &Path) -> Option<Result<Vec<u8>, Self::Error>> {
+        path.is_file().then(|| self.read(path))
     }
 
     fn write(&mut self, path: &Path, contents: &[u8]) -> Result<(), Self::Error> {
@@ -77,11 +82,16 @@ mod test_fs {
     impl FileSystem for TestFs {
         type Error = NotFound;
 
-        fn read(&mut self, path: &Path) -> Result<Vec<u8>, Self::Error> {
-            self.files
-                .get(path)
-                .cloned()
-                .ok_or_else(|| NotFound(path.to_path_buf()))
+        fn read(&self, path: &Path) -> Result<Vec<u8>, Self::Error> {
+            if let Some(Ok(file)) = self.read_if_exists(path) {
+                Ok(file)
+            } else {
+                Err(NotFound(path.to_path_buf()))
+            }
+        }
+
+        fn read_if_exists(&self, path: &Path) -> Option<Result<Vec<u8>, Self::Error>> {
+            self.files.get(path).cloned().map(Ok)
         }
 
         fn write(&mut self, path: &Path, contents: &[u8]) -> Result<(), Self::Error> {

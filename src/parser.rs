@@ -1,6 +1,7 @@
 use chumsky::{
     input::{Input as _, Stream, ValueInput},
-    prelude::{Parser as _, *},
+    prelude::*,
+    Parser as _,
 };
 use internment::Intern;
 
@@ -11,7 +12,7 @@ use crate::{
     token::Token::{self, *},
 };
 
-pub fn parse(file_id: FileId, input: &str) -> ParseResult<File, Rich<'_, Token, Span>> {
+pub fn parse(file_id: FileId, input: &str) -> ParseResult<File<Path>, Rich<'_, Token, Span>> {
     let eoi = {
         let len = input.len() as u32;
         Span::new(file_id, len, len + 1)
@@ -26,10 +27,10 @@ pub fn parse(file_id: FileId, input: &str) -> ParseResult<File, Rich<'_, Token, 
 type Extra<'a> = extra::Err<Rich<'a, Token, Span>>;
 trait Input<'a>: ValueInput<'a, Token = Token, Span = Span> {}
 impl<'a, I: ValueInput<'a, Token = Token, Span = Span>> Input<'a> for I {}
-trait Parser<'a, I: Input<'a>, T>: chumsky::Parser<'a, I, T, Extra<'a>> + Clone {}
-impl<'a, I: Input<'a>, T, P: chumsky::Parser<'a, I, T, Extra<'a>> + Clone> Parser<'a, I, T> for P {}
+trait Parser<'a, I: Input<'a>, O>: chumsky::Parser<'a, I, O, Extra<'a>> + Clone {}
+impl<'a, I: Input<'a>, O, P: chumsky::Parser<'a, I, O, Extra<'a>> + Clone> Parser<'a, I, O> for P {}
 
-fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
+fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File<Path>> {
     item()
         .repeated()
         .collect()
@@ -37,12 +38,12 @@ fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
         .map(|items| File { items })
 }
 
-fn item<'a, I: Input<'a>>() -> impl Parser<'a, I, Item> {
+fn item<'a, I: Input<'a>>() -> impl Parser<'a, I, Item<Path>> {
     choice((
         import().map(Item::Import),
         type_alias().map(Item::TypeAlias),
-        struct_().map(Item::Struct),
-        enum_().map(Item::Enum),
+        r#struct().map(Item::Struct),
+        r#enum().map(Item::Enum),
         function().map(Item::Function),
         binding(ConstKw).map(Item::Constant),
     ))
@@ -50,7 +51,7 @@ fn item<'a, I: Input<'a>>() -> impl Parser<'a, I, Item> {
 }
 
 fn import<'a, I: Input<'a>>() -> impl Parser<'a, I, Import> {
-    recursive(|import| {
+    let import = recursive(|import| {
         let options = just(AsKw)
             .ignore_then(ident())
             .map(ImportOptions::Rename)
@@ -71,13 +72,15 @@ fn import<'a, I: Input<'a>>() -> impl Parser<'a, I, Import> {
 
         let wildcard = just(Star).to(Import::Wildcard);
 
-        just(ImportKw)
-            .ignore_then(choice((tree, group, wildcard)))
-            .then_ignore(just(Semicolon))
-    })
+        choice((tree, group, wildcard))
+    });
+
+    just(ImportKw)
+        .ignore_then(import)
+        .then_ignore(just(Semicolon))
 }
 
-fn type_alias<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeAlias> {
+fn type_alias<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeAlias<Path>> {
     just(TypeKw)
         .ignore_then(type_expr())
         .then_ignore(just(Equals))
@@ -86,7 +89,7 @@ fn type_alias<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeAlias> {
         .map(|(lhs, rhs)| TypeAlias { lhs, rhs })
 }
 
-fn struct_<'a, I: Input<'a>>() -> impl Parser<'a, I, Struct> {
+fn r#struct<'a, I: Input<'a>>() -> impl Parser<'a, I, Struct<Path>> {
     just(StructKw)
         .ignore_then(type_expr())
         .then(variant(type_expr()))
@@ -103,7 +106,7 @@ fn struct_<'a, I: Input<'a>>() -> impl Parser<'a, I, Struct> {
         })
 }
 
-fn enum_<'a, I: Input<'a>>() -> impl Parser<'a, I, Enum> {
+fn r#enum<'a, I: Input<'a>>() -> impl Parser<'a, I, Enum<Path>> {
     just(EnumKw)
         .ignore_then(type_expr())
         .then(
@@ -141,7 +144,7 @@ fn variant<'a, I: Input<'a>, T>(p: impl Parser<'a, I, T>) -> impl Parser<'a, I, 
         .map(|variant| variant.unwrap_or(Variant::Unit))
 }
 
-fn type_expr<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeExpr> {
+fn type_expr<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeExpr<Path>> {
     recursive(|type_expr| {
         let primitive = select! {
             IntTy => TypeExpr::Int,
@@ -151,22 +154,21 @@ fn type_expr<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeExpr> {
             CharTy => TypeExpr::Char
         };
 
-        let named = ident()
-            .then(
-                type_expr
-                    .separated_by(just(Comma))
-                    .allow_trailing()
-                    .collect()
-                    .delimited_by(just(LeftBracket), just(RightBracket))
-                    .or_not(),
-            )
-            .map(|(name, generics)| TypeExpr::Named { name, generics });
+        let generics = type_expr
+            .separated_by(just(Comma))
+            .allow_trailing()
+            .collect()
+            .delimited_by(just(LeftBracket), just(RightBracket));
+
+        let named = path()
+            .then(generics.or_not())
+            .map(|(path, generics)| TypeExpr::Named { path, generics });
 
         primitive.or(named)
     })
 }
 
-fn function<'a, I: Input<'a>>() -> impl Parser<'a, I, Function> {
+fn function<'a, I: Input<'a>>() -> impl Parser<'a, I, Function<Path>> {
     let generics = type_expr()
         .separated_by(just(Comma))
         .allow_trailing()
@@ -198,7 +200,7 @@ fn function<'a, I: Input<'a>>() -> impl Parser<'a, I, Function> {
         })
 }
 
-fn binding<'a, I: Input<'a>>(start_token: Token) -> impl Parser<'a, I, Binding> {
+fn binding<'a, I: Input<'a>>(start_token: Token) -> impl Parser<'a, I, Binding<Path>> {
     just(start_token)
         .ignore_then(ident())
         .then(just(Colon).ignore_then(type_expr()).or_not())
@@ -208,7 +210,7 @@ fn binding<'a, I: Input<'a>>(start_token: Token) -> impl Parser<'a, I, Binding> 
         .map(|((name, ty), value)| Binding { name, ty, value })
 }
 
-fn block<'a, I: Input<'a>>() -> impl Parser<'a, I, Block> {
+fn block<'a, I: Input<'a>>() -> impl Parser<'a, I, Block<Path>> {
     stmt()
         .repeated()
         .collect()
@@ -217,7 +219,7 @@ fn block<'a, I: Input<'a>>() -> impl Parser<'a, I, Block> {
         .map(|(stmts, tail)| Block { stmts, tail })
 }
 
-fn stmt<'a, I: Input<'a>>() -> impl Parser<'a, I, Stmt> {
+fn stmt<'a, I: Input<'a>>() -> impl Parser<'a, I, Stmt<Path>> {
     let expr_stmt = expr()
         .then(just(Semicolon).or_not())
         .try_map(|(expr, semicolon), span| {
@@ -238,128 +240,47 @@ fn stmt<'a, I: Input<'a>>() -> impl Parser<'a, I, Stmt> {
         .ignore_then(expr().or_not())
         .then_ignore(just(Semicolon))
         .map(Stmt::Return);
-    let item_stmt = item().map(Stmt::Item);
 
-    choice((
-        expr_stmt,
-        let_stmt,
-        break_stmt,
-        continue_stmt,
-        return_stmt,
-        item_stmt,
-    ))
+    choice((expr_stmt, let_stmt, break_stmt, continue_stmt, return_stmt))
 }
 
-fn expr<'a, I: Input<'a>>() -> impl Parser<'a, I, Expr> {
+fn expr<'a, I: Input<'a>>() -> impl Parser<'a, I, Expr<Path>> {
     recursive(|expr| {
-        let expr_boxed = expr.clone().map(Box::new);
-
-        let block_expr = block().map(Expr::Block);
-
-        let if_expr = recursive(|if_expr| {
-            let else_branch = if_expr
-                .map(|if_expr| Block {
-                    stmts: Vec::new(),
-                    tail: Some(Box::new(if_expr)),
-                })
-                .or(block());
-
-            just(IfKw)
-                .ignore_then(expr_boxed.clone())
-                .then(block())
-                .then(just(ElseKw).ignore_then(else_branch).or_not())
-                .map(|((condition, then_branch), else_branch)| Expr::If {
-                    condition,
-                    then_branch,
-                    else_branch,
-                })
-        });
-
-        let loop_expr = just(LoopKw).ignore_then(block()).map(Expr::Loop);
-
-        let while_expr = just(WhileKw)
-            .ignore_then(expr_boxed.clone())
-            .then(block())
-            .map(|(condition, body)| Expr::While { condition, body });
-
         let paren = expr
             .clone()
             .delimited_by(just(LeftParen), just(RightParen))
             .map(|expr| Expr::Paren(Box::new(expr)));
 
-        let tuple = expr
+        let literal = select! {
+                True => Expr::Bool(true),
+                False => Expr::Bool(false),
+                Int(i) => Expr::Int(i),
+                Float(f) => Expr::Float(f),
+                Char(c) => Expr::Char(c),
+                String(s) => Expr::String(s),
+        };
+
+        let expr_list = expr
             .clone()
             .separated_by(just(Comma))
             .allow_trailing()
-            .collect()
+            .collect();
+
+        let tuple = expr_list
+            .clone()
             .delimited_by(just(LeftParen), just(RightParen))
             .map(Expr::Tuple);
 
-        let array = expr
+        let array = expr_list
             .clone()
-            .separated_by(just(Comma))
-            .allow_trailing()
-            .collect()
             .delimited_by(just(LeftBracket), just(RightBracket))
             .map(Expr::Array);
 
-        let primitive_literal = select! {
-            True => Expr::Bool(true),
-            False => Expr::Bool(false),
-            Int(i) => Expr::Int(i),
-            Float(f) => Expr::Float(f),
-            Char(c) => Expr::Char(c),
-            String(s) => Expr::String(s),
-        }
-        .or(path().map(Expr::Path));
+        let path = path().map(Expr::Path);
 
-        let struct_literal = {
-            let field = ident().then_ignore(just(Colon)).then(expr.clone());
+        let value = choice((literal, tuple, array, path));
 
-            path()
-                .then(
-                    field
-                        .separated_by(just(Comma))
-                        .allow_trailing()
-                        .collect()
-                        .delimited_by(just(LeftBrace), just(RightBrace)),
-                )
-                .map(|(name, fields)| Expr::StructLiteral { name, fields })
-        };
-
-        let call = expr_boxed
-            .clone()
-            .then(
-                expr.clone()
-                    .separated_by(just(Comma))
-                    .allow_trailing()
-                    .collect()
-                    .delimited_by(just(LeftParen), just(RightParen)),
-            )
-            .map(|(function, args)| Expr::Call { function, args });
-
-        let index = expr_boxed
-            .clone()
-            .then(
-                expr_boxed
-                    .clone()
-                    .delimited_by(just(LeftBracket), just(RightBracket)),
-            )
-            .map(|(expr, index)| Expr::Index { expr, index });
-
-        let atom = choice((
-            block_expr,
-            if_expr,
-            loop_expr,
-            while_expr,
-            paren,
-            tuple,
-            array,
-            primitive_literal,
-            struct_literal,
-            call,
-            index,
-        ));
+        let atom = choice((paren, value));
 
         atom.pratt({
             use chumsky::pratt::*;
@@ -380,6 +301,23 @@ fn expr<'a, I: Input<'a>>() -> impl Parser<'a, I, Expr> {
             };
 
             (
+                postfix(
+                    8,
+                    expr_list.delimited_by(just(LeftParen), just(RightParen)),
+                    |function, args| Expr::Call {
+                        function: Box::new(function),
+                        args,
+                    },
+                ),
+                postfix(
+                    8,
+                    expr.clone()
+                        .delimited_by(just(LeftBracket), just(RightBracket)),
+                    |expr, index| Expr::Index {
+                        expr: Box::new(expr),
+                        index: Box::new(index),
+                    },
+                ),
                 prefix(7, Minus),
                 prefix(7, Not),
                 infix(left(6), Star),
@@ -401,18 +339,178 @@ fn expr<'a, I: Input<'a>>() -> impl Parser<'a, I, Expr> {
     })
 }
 
+fn expr2<'a, I: Input<'a>>() -> impl Parser<'a, I, Expr<Path>> {
+    recursive(|expr| {
+        let inline_expr = recursive(|inline_expr| {
+            let paren = inline_expr
+                .clone()
+                .delimited_by(just(LeftParen), just(RightParen))
+                .map(|expr| Expr::Paren(Box::new(expr)));
+
+            let tuple = inline_expr
+                .clone()
+                .separated_by(just(Comma))
+                .allow_trailing()
+                .collect()
+                .delimited_by(just(LeftParen), just(RightParen))
+                .map(Expr::Tuple);
+
+            let array = inline_expr
+                .clone()
+                .separated_by(just(Comma))
+                .allow_trailing()
+                .collect()
+                .delimited_by(just(LeftBracket), just(RightBracket))
+                .map(Expr::Array);
+
+            let primitive_literal = select! {
+                True => Expr::Bool(true),
+                False => Expr::Bool(false),
+                Int(i) => Expr::Int(i),
+                Float(f) => Expr::Float(f),
+                Char(c) => Expr::Char(c),
+                String(s) => Expr::String(s),
+            }
+            .or(path().map(Expr::Path));
+
+            // FIXME: should have lower precedence than block exprs
+            // while ok {} is parsed as a struct literal
+            let struct_literal = {
+                let field = ident().then_ignore(just(Colon)).then(inline_expr.clone());
+
+                path()
+                    .then(
+                        field
+                            .separated_by(just(Comma))
+                            .allow_trailing()
+                            .collect()
+                            .delimited_by(just(LeftBrace), just(RightBrace)),
+                    )
+                    .map(|(name, fields)| Expr::StructLiteral { name, fields })
+            };
+
+            let atom = choice((
+                paren,
+                tuple,
+                array,
+                primitive_literal,
+                // struct_literal,
+            ));
+
+            // let call = atom
+            //     .clone()
+            //     .map(Box::new)
+            //     .clone()
+            //     .then(
+            //         inline_expr
+            //             .clone()
+            //             .separated_by(just(Comma))
+            //             .allow_trailing()
+            //             .collect()
+            //             .delimited_by(just(LeftParen), just(RightParen)),
+            //     )
+            //     .map(|(function, args)| Expr::Call { function, args });
+
+            let args = inline_expr
+                .clone()
+                .separated_by(just(Comma))
+                .allow_trailing()
+                .collect()
+                .delimited_by(just(LeftParen), just(RightParen));
+
+            let call = atom.foldl_with(args.repeated(), |function, args, _| Expr::Call {
+                function: Box::new(function),
+                args,
+            });
+
+            // let index = inline_expr
+            //     .clone()
+            //     .map(Box::new)
+            //     .clone()
+            //     .then(
+            //         inline_expr
+            //             .map(Box::new)
+            //             .delimited_by(just(LeftBracket), just(RightBracket)),
+            //     )
+            //     .map(|(expr, index)| Expr::Index { expr, index });
+
+            call.pratt({
+                use chumsky::pratt::*;
+
+                let prefix = |bp, op: Token| {
+                    prefix(bp, just(op), move |expr| Expr::Prefix {
+                        op: op.into(),
+                        expr: Box::new(expr),
+                    })
+                };
+
+                let infix = |assoc, op: Token| {
+                    infix(assoc, just(op), move |lhs, rhs| Expr::Infix {
+                        lhs: Box::new(lhs),
+                        op: op.into(),
+                        rhs: Box::new(rhs),
+                    })
+                };
+
+                (
+                    prefix(7, Minus),
+                    prefix(7, Not),
+                    infix(left(6), Star),
+                    infix(left(6), Slash),
+                    infix(left(6), Percent),
+                    infix(left(5), Plus),
+                    infix(left(5), Minus),
+                    infix(left(4), Eq),
+                    infix(left(4), Ne),
+                    infix(left(4), Lt),
+                    infix(left(4), Le),
+                    infix(left(4), Gt),
+                    infix(left(4), Ge),
+                    infix(left(3), LogicAnd),
+                    infix(left(2), LogicOr),
+                    infix(right(1), Equals),
+                )
+            })
+        });
+
+        let block_expr = block().map(Expr::Block);
+
+        let if_expr = recursive(|if_expr| {
+            let else_branch = if_expr
+                .map(|if_expr| Block {
+                    stmts: Vec::new(),
+                    tail: Some(Box::new(if_expr)),
+                })
+                .or(block());
+
+            just(IfKw)
+                .ignore_then(expr.clone().map(Box::new))
+                .then(block())
+                .then(just(ElseKw).ignore_then(else_branch).or_not())
+                .map(|((condition, then_branch), else_branch)| Expr::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                })
+        });
+
+        let loop_expr = just(LoopKw).ignore_then(block()).map(Expr::Loop);
+
+        let while_expr = just(WhileKw)
+            .ignore_then(expr.map(Box::new))
+            .then(block())
+            .map(|(condition, body)| Expr::While { condition, body });
+
+        choice((block_expr, if_expr, loop_expr, while_expr, inline_expr))
+    })
+}
+
 fn path<'a, I: Input<'a>>() -> impl Parser<'a, I, Path> {
     ident()
         .separated_by(just(Dot))
         .at_least(1)
         .collect()
-        .map(|components: Vec<_>| {
-            let (name, prefix) = components.split_last().unwrap();
-            Path {
-                prefix: prefix.to_vec(),
-                name: *name,
-            }
-        })
+        .map(|components| Path { components })
 }
 
 fn ident<'a, I: Input<'a>>() -> impl Parser<'a, I, Intern<str>> {
