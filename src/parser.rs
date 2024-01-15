@@ -127,9 +127,39 @@ fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File<Path>> {
                     )
                 });
 
-                let block_expr = block.map(Expr::Block);
+                let block_expr = block.clone().map(Expr::Block);
 
-                inline_expr.or(block_expr)
+                let if_expr = recursive(|if_expr| {
+                    just(IfKw)
+                        .ignore_then(expr.clone().map(Box::new))
+                        .then(block.clone())
+                        .then(
+                            just(ElseKw)
+                                .ignore_then(
+                                    if_expr
+                                        .map(|if_expr| Block {
+                                            stmts: Vec::new(),
+                                            tail: Some(Box::new(if_expr)),
+                                        })
+                                        .or(block.clone()),
+                                )
+                                .or_not(),
+                        )
+                        .map(|((condition, then_branch), else_branch)| Expr::If {
+                            condition,
+                            then_branch,
+                            else_branch,
+                        })
+                });
+
+                let loop_expr = just(LoopKw).ignore_then(block.clone()).map(Expr::Loop);
+
+                let while_expr = just(WhileKw)
+                    .ignore_then(expr.map(Box::new))
+                    .then(block)
+                    .map(|(condition, body)| Expr::While { condition, body });
+
+                choice((block_expr, if_expr, loop_expr, while_expr, inline_expr))
             });
 
             expr_.set(expr.clone()).ok().unwrap();
