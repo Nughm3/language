@@ -1,18 +1,19 @@
+use id_arena::Id;
 use internment::Intern;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct File<S> {
-    pub items: Vec<Item<S>>,
+pub struct File {
+    pub items: Vec<Item>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Item<S> {
+pub enum Item {
     Import(Import),
-    TypeAlias(TypeAlias<S>),
-    Struct(Struct<S>),
-    Enum(Enum<S>),
-    Function(Function<S>),
-    Constant(Binding<S>),
+    TypeAlias(TypeAlias),
+    Struct(Struct),
+    Enum(Enum),
+    Function(Function),
+    Constant(Binding),
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -35,21 +36,21 @@ pub enum ImportOptions {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct TypeAlias<S> {
-    pub lhs: TypeExpr<S>,
-    pub rhs: TypeExpr<S>,
+pub struct TypeAlias {
+    pub lhs: TypeExpr<Def>,
+    pub rhs: TypeExpr<Ref>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Struct<S> {
-    pub ty: TypeExpr<S>,
-    pub body: Variant<TypeExpr<S>>,
+pub struct Struct {
+    pub ty: TypeExpr<Def>,
+    pub body: Variant<TypeExpr<Ref>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Enum<S> {
-    pub ty: TypeExpr<S>,
-    pub variants: Vec<(Intern<str>, Variant<TypeExpr<S>>)>,
+pub struct Enum {
+    pub ty: TypeExpr<Def>,
+    pub variants: Vec<(Intern<str>, Variant<TypeExpr<Ref>>)>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -60,48 +61,48 @@ pub enum Variant<T> {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum TypeExpr<S> {
+pub enum TypeExpr<T> {
     Int,
     Float,
     Bool,
     String,
     Char,
     Named {
-        path: S,
-        generics: Option<Vec<TypeExpr<S>>>,
+        path: T,
+        generics: Option<Vec<TypeExpr<T>>>,
     },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Function<S> {
-    pub name: Intern<str>,
-    pub generics: Option<Vec<TypeExpr<S>>>,
-    pub params: Vec<(Intern<str>, TypeExpr<S>)>,
-    pub return_ty: Option<TypeExpr<S>>,
-    pub body: Block<S>,
+pub struct Function {
+    pub name: Def,
+    pub generics: Option<Vec<TypeExpr<Def>>>,
+    pub params: Vec<(Intern<str>, TypeExpr<Ref>)>,
+    pub return_ty: Option<TypeExpr<Ref>>,
+    pub body: Block,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Binding<S> {
-    pub name: Intern<str>,
-    pub ty: Option<TypeExpr<S>>,
-    pub value: Expr<S>,
+pub struct Binding {
+    pub name: Def,
+    pub ty: Option<TypeExpr<Ref>>,
+    pub value: Expr,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Block<S> {
-    pub stmts: Vec<Stmt<S>>,
-    pub tail: Option<Box<Expr<S>>>,
+pub struct Block {
+    pub stmts: Vec<Stmt>,
+    pub tail: Option<Box<Expr>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Stmt<S> {
-    Expr(Expr<S>),
-    Let(Binding<S>),
+pub enum Stmt {
+    Expr(Expr),
+    Let(Binding),
     Break,
     Continue,
-    Return(Option<Expr<S>>),
-    Item(Item<S>),
+    Return(Option<Expr>),
+    Item(Item),
 }
 
 pub type Float = ordered_float::NotNan<f64>;
@@ -119,43 +120,43 @@ pub enum StringLiteral {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Expr<S> {
-    Block(Block<S>),
+pub enum Expr {
+    Block(Block),
     If {
-        condition: Box<Expr<S>>,
-        then_branch: Block<S>,
-        else_branch: Option<Block<S>>,
+        condition: Box<Expr>,
+        then_branch: Block,
+        else_branch: Option<Block>,
     },
-    Loop(Block<S>),
+    Loop(Block),
     While {
-        condition: Box<Expr<S>>,
-        body: Block<S>,
+        condition: Box<Expr>,
+        body: Block,
     },
 
     Prefix {
         op: PrefixOp,
-        expr: Box<Expr<S>>,
+        expr: Box<Expr>,
     },
     Infix {
-        lhs: Box<Expr<S>>,
+        lhs: Box<Expr>,
         op: InfixOp,
-        rhs: Box<Expr<S>>,
+        rhs: Box<Expr>,
     },
-    Paren(Box<Expr<S>>),
+    Paren(Box<Expr>),
     Index {
-        expr: Box<Expr<S>>,
-        index: Box<Expr<S>>,
+        expr: Box<Expr>,
+        index: Box<Expr>,
     },
     Call {
-        function: Box<Expr<S>>,
-        args: Vec<Expr<S>>,
+        function: Box<Expr>,
+        args: Vec<Expr>,
     },
 
-    Tuple(Vec<Expr<S>>),
-    Array(Vec<Expr<S>>),
+    Tuple(Vec<Expr>),
+    Array(Vec<Expr>),
     StructLiteral {
-        name: Path,
-        fields: Vec<(Intern<str>, Expr<S>)>,
+        name: Ref,
+        fields: Vec<(Intern<str>, Expr)>,
     },
 
     Bool(bool),
@@ -163,7 +164,7 @@ pub enum Expr<S> {
     Float(Float),
     Char(CharLiteral),
     String(StringLiteral),
-    Path(S),
+    Path(Ref),
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -188,6 +189,30 @@ pub enum InfixOp {
     Gt,
     Ge,
     Assign,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct Def {
+    pub path: Path,
+    pub namespace: Namespace,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct Ref {
+    pub path: Path,
+    pub def_id: Option<Id<Def>>,
+}
+
+impl Ref {
+    pub fn def_id(&self) -> Id<Def> {
+        self.def_id.expect("unresolved reference")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum Namespace {
+    Type,
+    Value,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
