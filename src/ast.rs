@@ -36,20 +36,20 @@ pub enum ImportOptions {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct TypeAlias {
-    pub lhs: TypeExpr<Def>,
-    pub rhs: TypeExpr<Ref>,
+    pub lhs: TypeExpr,
+    pub rhs: TypeExpr,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Struct {
-    pub ty: TypeExpr<Def>,
-    pub body: Variant<TypeExpr<Ref>>,
+    pub ty: TypeExpr,
+    pub body: Variant<TypeExpr>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Enum {
-    pub ty: TypeExpr<Def>,
-    pub variants: Vec<(Intern<str>, Variant<TypeExpr<Ref>>)>,
+    pub ty: TypeExpr,
+    pub variants: Vec<(Intern<str>, Variant<TypeExpr>)>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -60,31 +60,40 @@ pub enum Variant<T> {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum TypeExpr<T> {
+pub enum TypeExpr {
     Int,
     Float,
     Bool,
     String,
     Char,
+    Tuple(Vec<TypeExpr>),
+    Array {
+        ty: Box<TypeExpr>,
+        len: Option<usize>,
+    },
+    Function {
+        params: Vec<TypeExpr>,
+        return_ty: Option<Box<TypeExpr>>,
+    },
     Named {
-        path: T,
-        generics: Option<Vec<TypeExpr<T>>>,
+        path: Path,
+        generics: Option<Vec<TypeExpr>>,
     },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Function {
-    pub name: Def,
-    pub generics: Option<Vec<TypeExpr<Def>>>,
-    pub params: Vec<(Intern<str>, TypeExpr<Ref>)>,
-    pub return_ty: Option<TypeExpr<Ref>>,
+    pub name: Intern<str>,
+    pub generics: Option<Vec<TypeExpr>>,
+    pub params: Vec<(Intern<str>, TypeExpr)>,
+    pub return_ty: Option<TypeExpr>,
     pub body: Block,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Binding {
-    pub name: Def,
-    pub ty: Option<TypeExpr<Ref>>,
+    pub name: Intern<str>,
+    pub ty: Option<TypeExpr>,
     pub value: Expr,
 }
 
@@ -153,17 +162,16 @@ pub enum Expr {
 
     Tuple(Vec<Expr>),
     Array(Vec<Expr>),
-    StructLiteral {
-        name: Ref,
-        fields: Vec<(Intern<str>, Expr)>,
-    },
 
     Bool(bool),
     Int(u64),
     Float(Float),
     Char(CharLiteral),
     String(StringLiteral),
-    Path(Ref),
+    Path {
+        path: Path,
+        variant: Variant<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -188,23 +196,6 @@ pub enum InfixOp {
     Gt,
     Ge,
     Assign,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Def {
-    pub path: Path,
-    pub namespace: Namespace,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Ref {
-    pub path: Path,
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum Namespace {
-    Type,
-    Value,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

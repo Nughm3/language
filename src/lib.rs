@@ -8,6 +8,7 @@ use crate::{
 pub mod ast;
 pub mod codemap;
 pub mod fs;
+pub mod hir;
 pub mod parser;
 pub mod span;
 pub mod token;

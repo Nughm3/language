@@ -66,7 +66,9 @@ fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
                     .delimited_by(just(LeftBracket), just(RightBracket))
                     .map(Expr::Array);
 
-                let path = r#ref().map(Expr::Path);
+                let path = path()
+                    .then(variant(expr.clone()))
+                    .map(|(path, variant)| Expr::Path { path, variant });
 
                 let value = choice((literal, tuple, array, path));
 
@@ -179,8 +181,8 @@ fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
                     },
                 );
                 let let_stmt = just(LetKw)
-                    .ignore_then(value_def())
-                    .then(just(Colon).ignore_then(type_expr(r#ref())).or_not())
+                    .ignore_then(ident())
+                    .then(just(Colon).ignore_then(type_expr()).or_not())
                     .then_ignore(just(Equals))
                     .then(expr.clone())
                     .then_ignore(just(Semicolon))
@@ -212,7 +214,7 @@ fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
         });
 
         let function = {
-            let generics = type_expr(type_def())
+            let generics = type_expr()
                 .separated_by(just(Comma))
                 .allow_trailing()
                 .collect()
@@ -220,16 +222,16 @@ fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
 
             let params = ident()
                 .then_ignore(just(Colon))
-                .then(type_expr(r#ref()))
+                .then(type_expr())
                 .separated_by(just(Comma))
                 .allow_trailing()
                 .collect()
                 .delimited_by(just(LeftParen), just(RightParen));
 
-            let return_ty = just(Arrow).ignore_then(type_expr(r#ref()));
+            let return_ty = just(Arrow).ignore_then(type_expr());
 
             just(FnKw)
-                .ignore_then(type_def())
+                .ignore_then(ident())
                 .then(generics.or_not())
                 .then(params)
                 .then(return_ty.or_not())
@@ -244,8 +246,8 @@ fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
         };
 
         let binding = just(ConstKw)
-            .ignore_then(value_def())
-            .then(just(Colon).ignore_then(type_expr(r#ref())).or_not())
+            .ignore_then(ident())
+            .then(just(Colon).ignore_then(type_expr()).or_not())
             .then_ignore(just(Equals))
             .then(expr_.get().unwrap().clone())
             .then_ignore(just(Semicolon))
@@ -299,17 +301,17 @@ fn import<'a, I: Input<'a>>() -> impl Parser<'a, I, Import> {
 
 fn type_alias<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeAlias> {
     just(TypeKw)
-        .ignore_then(type_expr(type_def()))
+        .ignore_then(type_expr())
         .then_ignore(just(Equals))
-        .then(type_expr(r#ref()))
+        .then(type_expr())
         .then_ignore(just(Semicolon))
         .map(|(lhs, rhs)| TypeAlias { lhs, rhs })
 }
 
 fn r#struct<'a, I: Input<'a>>() -> impl Parser<'a, I, Struct> {
     just(StructKw)
-        .ignore_then(type_expr(type_def()))
-        .then(variant(type_expr(r#ref())))
+        .ignore_then(type_expr())
+        .then(variant(type_expr()))
         .then(just(Semicolon).or_not())
         .try_map(|((ty, body), semicolon), span| {
             if matches!(body, Variant::Unit | Variant::Tuple(_)) && semicolon.is_none() {
@@ -325,10 +327,10 @@ fn r#struct<'a, I: Input<'a>>() -> impl Parser<'a, I, Struct> {
 
 fn r#enum<'a, I: Input<'a>>() -> impl Parser<'a, I, Enum> {
     just(EnumKw)
-        .ignore_then(type_expr(type_def()))
+        .ignore_then(type_expr())
         .then(
             ident()
-                .then(variant(type_expr(r#ref())))
+                .then(variant(type_expr()))
                 .separated_by(just(Comma))
                 .allow_trailing()
                 .collect()
@@ -361,9 +363,7 @@ fn variant<'a, I: Input<'a>, T>(p: impl Parser<'a, I, T>) -> impl Parser<'a, I, 
         .map(|variant| variant.unwrap_or(Variant::Unit))
 }
 
-fn type_expr<'a, I: Input<'a>, T: 'a>(
-    path: impl Parser<'a, I, T> + 'a,
-) -> impl Parser<'a, I, TypeExpr<T>> {
+fn type_expr<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeExpr> {
     recursive(|type_expr| {
         let primitive = select! {
             IntTy => TypeExpr::Int,
@@ -373,38 +373,55 @@ fn type_expr<'a, I: Input<'a>, T: 'a>(
             CharTy => TypeExpr::Char
         };
 
-        let generics = type_expr
+        let type_expr_list = type_expr
+            .clone()
             .separated_by(just(Comma))
-            .allow_trailing()
-            .collect()
-            .delimited_by(just(LeftBracket), just(RightBracket));
+            .allow_leading()
+            .collect();
 
-        let named = path
-            .then(generics.or_not())
-            .map(|(path, generics)| TypeExpr::Named { path, generics });
+        let tuple = type_expr_list
+            .clone()
+            .delimited_by(just(LeftParen), just(RightParen))
+            .map(TypeExpr::Tuple);
 
-        primitive.or(named)
+        let array = type_expr
+            .clone()
+            .then(
+                just(Semicolon)
+                    .ignore_then(select! { Int(i) => i })
+                    .or_not(),
+            )
+            .delimited_by(just(LeftBracket), just(RightBracket))
+            .map(|(ty, len)| TypeExpr::Array {
+                ty: Box::new(ty),
+                len: len.map(|len| len as usize),
+            });
+
+        let function = just(FnKw)
+            .ignore_then(
+                type_expr_list
+                    .clone()
+                    .delimited_by(just(LeftParen), just(RightParen)),
+            )
+            .then(
+                just(Arrow)
+                    .ignore_then(type_expr.clone().map(Box::new))
+                    .or_not(),
+            )
+            .map(|(params, return_ty)| TypeExpr::Function { params, return_ty });
+
+        let named = {
+            let generics = type_expr_list
+                .clone()
+                .delimited_by(just(LeftBracket), just(RightBracket));
+
+            path()
+                .then(generics.or_not())
+                .map(|(path, generics)| TypeExpr::Named { path, generics })
+        };
+
+        choice((primitive, tuple, array, function, named))
     })
-}
-
-fn type_def<'a, I: Input<'a>>() -> impl Parser<'a, I, Def> {
-    path().map(|path| Def {
-        path,
-        namespace: Namespace::Type,
-    })
-}
-
-fn value_def<'a, I: Input<'a>>() -> impl Parser<'a, I, Def> {
-    ident().map(|name| Def {
-        path: Path {
-            components: vec![name],
-        },
-        namespace: Namespace::Value,
-    })
-}
-
-fn r#ref<'a, I: Input<'a>>() -> impl Parser<'a, I, Ref> {
-    path().map(|path| Ref { path })
 }
 
 fn path<'a, I: Input<'a>>() -> impl Parser<'a, I, Path> {
