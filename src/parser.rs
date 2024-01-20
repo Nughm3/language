@@ -404,7 +404,7 @@ fn value_def<'a, I: Input<'a>>() -> impl Parser<'a, I, Def> {
 }
 
 fn r#ref<'a, I: Input<'a>>() -> impl Parser<'a, I, Ref> {
-    path().map(|path| Ref { path, def_id: None })
+    path().map(|path| Ref { path })
 }
 
 fn path<'a, I: Input<'a>>() -> impl Parser<'a, I, Path> {

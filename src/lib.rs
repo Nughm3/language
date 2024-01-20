@@ -1,8 +1,5 @@
 use std::{error::Error, path::Path};
 
-use internment::Intern;
-use thiserror::Error;
-
 use crate::{
     codemap::CodeMap,
     fs::{FileSystem, LocalFs},
@@ -12,7 +9,6 @@ pub mod ast;
 pub mod codemap;
 pub mod fs;
 pub mod parser;
-pub mod resolve;
 pub mod span;
 pub mod token;
 
@@ -53,13 +49,3 @@ where
         Ok(())
     }
 }
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ResolvedPath {
-    pub components: Vec<Intern<str>>,
-}
-
-pub type ResolutionResult<T> = Result<T, ResolutionError>;
-
-#[derive(Debug, Error)]
-pub enum ResolutionError {}

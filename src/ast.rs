@@ -1,4 +1,3 @@
-use id_arena::Id;
 use internment::Intern;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -200,13 +199,6 @@ pub struct Def {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Ref {
     pub path: Path,
-    pub def_id: Option<Id<Def>>,
-}
-
-impl Ref {
-    pub fn def_id(&self) -> Id<Def> {
-        self.def_id.expect("unresolved reference")
-    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
