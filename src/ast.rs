@@ -1,140 +1,55 @@
 use internment::Intern;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct File {
-    pub items: Vec<Item>,
-}
+use crate::token::Token;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Item {
-    Import(Import),
-    TypeAlias(TypeAlias),
-    Struct(Struct),
-    Enum(Enum),
-    Function(Function),
-    Constant(Binding),
-}
+pub struct File(pub Vec<Function>);
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Import {
-    Tree(ImportTree),
-    Group(Vec<Import>),
-    Wildcard,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ImportTree {
-    pub name: Intern<str>,
-    pub options: Option<ImportOptions>,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum ImportOptions {
-    Child(Box<Import>),
-    Rename(Intern<str>),
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct TypeAlias {
-    pub lhs: TypeExpr,
-    pub rhs: TypeExpr,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Struct {
-    pub ty: TypeExpr,
-    pub body: Variant<TypeExpr>,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Enum {
-    pub ty: TypeExpr,
-    pub variants: Vec<(Intern<str>, Variant<TypeExpr>)>,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Variant<T> {
-    Unit,
-    Tuple(Vec<T>),
-    Record(Vec<(Intern<str>, T)>),
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum TypeExpr {
+pub enum Type {
     Int,
-    Float,
     Bool,
-    String,
-    Char,
-    Tuple(Vec<TypeExpr>),
-    Array {
-        ty: Box<TypeExpr>,
-        len: Option<usize>,
-    },
+    Void,
     Function {
-        params: Vec<TypeExpr>,
-        return_ty: Option<Box<TypeExpr>>,
+        params: Vec<Type>,
+        return_type: Option<Box<Type>>,
     },
-    Named {
-        path: Path,
-        generics: Option<Vec<TypeExpr>>,
-    },
+
+    ParseError,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Function {
     pub name: Intern<str>,
-    pub generics: Option<Vec<TypeExpr>>,
-    pub params: Vec<(Intern<str>, TypeExpr)>,
-    pub return_ty: Option<TypeExpr>,
+    pub params: Vec<(Intern<str>, Type)>,
+    pub return_type: Option<Type>,
     pub body: Block,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Binding {
-    pub name: Intern<str>,
-    pub ty: Option<TypeExpr>,
-    pub value: Expr,
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Hash, PartialEq, Eq)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
+    pub functions: Vec<Function>,
     pub tail: Option<Box<Expr>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Stmt {
     Expr(Expr),
-    Let(Binding),
+    Let {
+        name: Intern<str>,
+        r#type: Option<Type>,
+        value: Expr,
+    },
     Break,
     Continue,
     Return(Option<Expr>),
-    Item(Item),
-}
-
-pub type Float = ordered_float::NotNan<f64>;
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum CharLiteral {
-    Character(char),
-    Byte(u8),
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum StringLiteral {
-    Text(Intern<str>),
-    Byte(Intern<[u8]>),
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Expr {
     Block(Block),
-    If {
-        condition: Box<Expr>,
-        then_branch: Block,
-        else_branch: Option<Block>,
-    },
+    If(ExprIf),
     Loop(Block),
     While {
         condition: Box<Expr>,
@@ -151,33 +66,60 @@ pub enum Expr {
         rhs: Box<Expr>,
     },
     Paren(Box<Expr>),
-    Index {
-        expr: Box<Expr>,
-        index: Box<Expr>,
-    },
     Call {
         function: Box<Expr>,
         args: Vec<Expr>,
     },
 
-    Tuple(Vec<Expr>),
-    Array(Vec<Expr>),
-
-    Bool(bool),
     Int(u64),
-    Float(Float),
-    Char(CharLiteral),
-    String(StringLiteral),
-    Path {
-        path: Path,
-        variant: Variant<Expr>,
-    },
+    Bool(bool),
+    Ident(Intern<str>),
+
+    ParseError,
+}
+
+impl Expr {
+    pub fn is_inline(&self) -> bool {
+        matches!(
+            self,
+            Expr::Prefix { .. }
+                | Expr::Infix { .. }
+                | Expr::Paren(_)
+                | Expr::Call { .. }
+                | Expr::Int(_)
+                | Expr::Bool(_)
+                | Expr::Ident(_)
+        )
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ExprIf {
+    pub condition: Box<Expr>,
+    pub then: Block,
+    pub r#else: Option<ExprElse>,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ExprElse {
+    If(Box<ExprIf>),
+    Block(Block),
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum PrefixOp {
     Not,
     Negate,
+}
+
+impl From<Token> for PrefixOp {
+    fn from(token: Token) -> Self {
+        match token {
+            Token::Not => PrefixOp::Not,
+            Token::Minus => PrefixOp::Negate,
+            _ => panic!("invalid prefix operator: {token:?}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -198,7 +140,24 @@ pub enum InfixOp {
     Assign,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Path {
-    pub components: Vec<Intern<str>>,
+impl From<Token> for InfixOp {
+    fn from(token: Token) -> Self {
+        match token {
+            Token::Plus => InfixOp::Add,
+            Token::Minus => InfixOp::Sub,
+            Token::Star => InfixOp::Mul,
+            Token::Slash => InfixOp::Div,
+            Token::Percent => InfixOp::Rem,
+            Token::LogicAnd => InfixOp::LogicAnd,
+            Token::LogicOr => InfixOp::LogicOr,
+            Token::Eq => InfixOp::Eq,
+            Token::Ne => InfixOp::Ne,
+            Token::Lt => InfixOp::Lt,
+            Token::Le => InfixOp::Le,
+            Token::Gt => InfixOp::Gt,
+            Token::Ge => InfixOp::Ge,
+            Token::Equals => InfixOp::Assign,
+            _ => panic!("invalid infix operator: {token:?}"),
+        }
+    }
 }

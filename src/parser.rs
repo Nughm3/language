@@ -1,437 +1,440 @@
-use chumsky::{
-    input::{Input as _, Stream, ValueInput},
-    prelude::*,
-    Parser as _,
-};
+use ariadne::{Color, Label, Report, ReportKind};
 use internment::Intern;
 
 use crate::{
     ast::*,
-    codemap::FileId,
-    span::Span,
+    span::*,
     token::Token::{self, *},
 };
 
-pub fn parse(file_id: FileId, input: &str) -> ParseResult<File, Rich<'_, Token, Span>> {
-    let eoi = {
-        let len = input.len() as u32;
-        Span::new(file_id, len, len + 1)
+pub fn parse(input: &str) -> Result<File, Vec<Report<Span>>> {
+    let mut parser = {
+        let (tokens, spans) = Token::lexer(input)
+            .map(|spanned| (*spanned, spanned.span()))
+            .unzip();
+
+        Parser {
+            input,
+            tokens,
+            spans,
+            pos: 0,
+            errors: Vec::new(),
+        }
     };
 
-    let tokens = Token::lexer(file_id, input);
-    let stream = Stream::from_iter(tokens).spanned(eoi);
-
-    file().parse(stream)
+    let file = file(&mut parser);
+    if parser.errors.is_empty() {
+        Ok(file)
+    } else {
+        Err(parser.errors)
+    }
 }
 
-type Extra<'a> = extra::Err<Rich<'a, Token, Span>>;
-trait Input<'a>: ValueInput<'a, Token = Token, Span = Span> {}
-impl<'a, I: ValueInput<'a, Token = Token, Span = Span>> Input<'a> for I {}
-trait Parser<'a, I: Input<'a>, O>: chumsky::Parser<'a, I, O, Extra<'a>> + Clone {}
-impl<'a, I: Input<'a>, O, P: chumsky::Parser<'a, I, O, Extra<'a>> + Clone> Parser<'a, I, O> for P {}
+struct Parser<'a> {
+    input: &'a str,
+    tokens: Vec<Token>,
+    spans: Vec<Span>,
+    pos: usize,
+    errors: Vec<Report<'a, Span>>,
+}
 
-fn file<'a, I: Input<'a>>() -> impl Parser<'a, I, File> {
-    let item = recursive(|item| {
-        let expr_ = std::cell::OnceCell::new(); // FIXME horrible hack
+impl<'a> Parser<'a> {
+    fn next(&mut self) -> Token {
+        let token = self.peek();
+        self.pos += 1;
+        token
+    }
 
-        let block = recursive(|block| {
-            let expr = recursive(|expr| {
-                let paren = expr
-                    .clone()
-                    .delimited_by(just(LeftParen), just(RightParen))
-                    .map(|expr| Expr::Paren(Box::new(expr)));
+    fn peek(&self) -> Token {
+        self.tokens.get(self.pos).copied().unwrap_or(Token::Eof)
+    }
 
-                let literal = select! {
-                        True => Expr::Bool(true),
-                        False => Expr::Bool(false),
-                        Int(i) => Expr::Int(i),
-                        Float(f) => Expr::Float(f),
-                        Char(c) => Expr::Char(c),
-                        String(s) => Expr::String(s),
-                };
+    fn at(&self, token: Token) -> bool {
+        self.peek() == token
+    }
 
-                let expr_list = expr
-                    .clone()
-                    .separated_by(just(Comma))
-                    .allow_trailing()
-                    .collect();
+    fn consume(&mut self, token: Token) -> bool {
+        let consumed = self.at(token);
+        if consumed {
+            self.pos += 1;
+        }
+        consumed
+    }
 
-                let tuple = expr_list
-                    .clone()
-                    .delimited_by(just(LeftParen), just(RightParen))
-                    .map(Expr::Tuple);
+    fn expect(&mut self, token: Token) -> bool {
+        let ok = self.consume(token);
+        if !ok {
+            self.error(&[token]);
+        }
+        ok
+    }
 
-                let array = expr_list
-                    .clone()
-                    .delimited_by(just(LeftBracket), just(RightBracket))
-                    .map(Expr::Array);
+    fn error(&mut self, expected: &[Token]) {
+        let actual = self.next();
+        let span = self.span();
 
-                let path = path()
-                    .then(variant(expr.clone()))
-                    .map(|(path, variant)| Expr::Path { path, variant });
-
-                let value = choice((literal, tuple, array, path));
-
-                let atom = choice((paren, value));
-
-                let inline_expr = atom.pratt({
-                    use chumsky::pratt::*;
-
-                    let prefix = |bp, op: Token| {
-                        prefix(bp, just(op), move |expr| Expr::Prefix {
-                            op: op.into(),
-                            expr: Box::new(expr),
-                        })
-                    };
-
-                    let infix = |assoc, op: Token| {
-                        infix(assoc, just(op), move |lhs, rhs| Expr::Infix {
-                            lhs: Box::new(lhs),
-                            op: op.into(),
-                            rhs: Box::new(rhs),
-                        })
-                    };
-
-                    (
-                        postfix(
-                            8,
-                            expr_list.delimited_by(just(LeftParen), just(RightParen)),
-                            |function, args| Expr::Call {
-                                function: Box::new(function),
-                                args,
-                            },
-                        ),
-                        postfix(
-                            8,
-                            expr.clone()
-                                .delimited_by(just(LeftBracket), just(RightBracket)),
-                            |expr, index| Expr::Index {
-                                expr: Box::new(expr),
-                                index: Box::new(index),
-                            },
-                        ),
-                        prefix(7, Minus),
-                        prefix(7, Not),
-                        infix(left(6), Star),
-                        infix(left(6), Slash),
-                        infix(left(6), Percent),
-                        infix(left(5), Plus),
-                        infix(left(5), Minus),
-                        infix(left(4), Eq),
-                        infix(left(4), Ne),
-                        infix(left(4), Lt),
-                        infix(left(4), Le),
-                        infix(left(4), Gt),
-                        infix(left(4), Ge),
-                        infix(left(3), LogicAnd),
-                        infix(left(2), LogicOr),
-                        infix(right(1), Equals),
-                    )
-                });
-
-                let block_expr = block.clone().map(Expr::Block);
-
-                let if_expr = recursive(|if_expr| {
-                    just(IfKw)
-                        .ignore_then(expr.clone().map(Box::new))
-                        .then(block.clone())
-                        .then(
-                            just(ElseKw)
-                                .ignore_then(
-                                    if_expr
-                                        .map(|if_expr| Block {
-                                            stmts: Vec::new(),
-                                            tail: Some(Box::new(if_expr)),
-                                        })
-                                        .or(block.clone()),
-                                )
-                                .or_not(),
-                        )
-                        .map(|((condition, then_branch), else_branch)| Expr::If {
-                            condition,
-                            then_branch,
-                            else_branch,
-                        })
-                });
-
-                let loop_expr = just(LoopKw).ignore_then(block.clone()).map(Expr::Loop);
-
-                let while_expr = just(WhileKw)
-                    .ignore_then(expr.map(Box::new))
-                    .then(block)
-                    .map(|(condition, body)| Expr::While { condition, body });
-
-                choice((block_expr, if_expr, loop_expr, while_expr, inline_expr))
-            });
-
-            expr_.set(expr.clone()).ok().unwrap();
-
-            let stmt = {
-                let expr_stmt = expr.clone().then(just(Semicolon).or_not()).try_map(
-                    |(expr, semicolon), span| {
-                        if !matches!(
-                            expr,
-                            Expr::Block(_) | Expr::If { .. } | Expr::Loop(_) | Expr::While { .. }
-                        ) && semicolon.is_none()
-                        {
-                            Err(Rich::custom(span, "expected semicolon: ';'"))
-                        } else {
-                            Ok(Stmt::Expr(expr))
-                        }
-                    },
-                );
-                let let_stmt = just(LetKw)
-                    .ignore_then(ident())
-                    .then(just(Colon).ignore_then(type_expr()).or_not())
-                    .then_ignore(just(Equals))
-                    .then(expr.clone())
-                    .then_ignore(just(Semicolon))
-                    .map(|((name, ty), value)| Binding { name, ty, value })
-                    .map(Stmt::Let);
-                let break_stmt = just(BreakKw).then(just(Semicolon)).to(Stmt::Break);
-                let continue_stmt = just(ContinueKw).then(just(Semicolon)).to(Stmt::Continue);
-                let return_stmt = just(ReturnKw)
-                    .ignore_then(expr.clone().or_not())
-                    .then_ignore(just(Semicolon))
-                    .map(Stmt::Return);
-                let item_stmt = item.map(Stmt::Item);
-
-                choice((
-                    expr_stmt,
-                    let_stmt,
-                    break_stmt,
-                    continue_stmt,
-                    return_stmt,
-                    item_stmt,
-                ))
+        let message = if let Error = actual {
+            format!("unrecognized token: '{}'", self.text())
+        } else {
+            let expected = match expected.len() {
+                0 => panic!("empty expected list"),
+                1 => format!("{:?}", expected[0]),
+                _ => {
+                    let expected: Vec<String> =
+                        expected.iter().map(|token| format!("{token:?}")).collect();
+                    expected.join("', '")
+                }
             };
 
-            stmt.repeated()
-                .collect()
-                .then(expr.clone().map(Box::new).or_not())
-                .delimited_by(just(LeftBrace), just(RightBrace))
-                .map(|(stmts, tail)| Block { stmts, tail })
-        });
-
-        let function = {
-            let generics = type_expr()
-                .separated_by(just(Comma))
-                .allow_trailing()
-                .collect()
-                .delimited_by(just(LeftBracket), just(RightBracket));
-
-            let params = ident()
-                .then_ignore(just(Colon))
-                .then(type_expr())
-                .separated_by(just(Comma))
-                .allow_trailing()
-                .collect()
-                .delimited_by(just(LeftParen), just(RightParen));
-
-            let return_ty = just(Arrow).ignore_then(type_expr());
-
-            just(FnKw)
-                .ignore_then(ident())
-                .then(generics.or_not())
-                .then(params)
-                .then(return_ty.or_not())
-                .then(block)
-                .map(|((((name, generics), params), return_ty), body)| Function {
-                    name,
-                    generics,
-                    params,
-                    return_ty,
-                    body,
-                })
+            format!("expected '{expected}', found '{actual:?}'")
         };
 
-        let binding = just(ConstKw)
-            .ignore_then(ident())
-            .then(just(Colon).ignore_then(type_expr()).or_not())
-            .then_ignore(just(Equals))
-            .then(expr_.get().unwrap().clone())
-            .then_ignore(just(Semicolon))
-            .map(|((name, ty), value)| Binding { name, ty, value });
+        self.errors.push(
+            Report::build(ReportKind::Error, (), span.start as usize)
+                .with_message(&message)
+                .with_label(
+                    Label::new(span)
+                        .with_message(&message)
+                        .with_color(Color::Red),
+                )
+                .finish(),
+        );
+    }
 
-        choice((
-            import().map(Item::Import),
-            type_alias().map(Item::TypeAlias),
-            r#struct().map(Item::Struct),
-            r#enum().map(Item::Enum),
-            function.map(Item::Function),
-            binding.map(Item::Constant),
-        ))
-    });
+    fn recover_to(&mut self, tokens: &[Token]) {
+        let Some(mut current) = self.tokens.get(self.pos - 1).copied() else {
+            return;
+        };
 
-    item.repeated()
-        .collect()
-        .then_ignore(end())
-        .map(|items| File { items })
+        while !tokens.contains(&current) && current != Token::Eof {
+            current = self.next();
+        }
+    }
+
+    fn expect_or_recover(&mut self, token: Token, tokens: &[Token]) -> bool {
+        let ok = self.expect(token);
+        if !ok {
+            self.recover_to(tokens);
+        }
+        ok
+    }
+
+    fn span(&self) -> Span {
+        self.spans.get(self.pos - 1).copied().unwrap_or_default()
+    }
+
+    fn text(&self) -> &str {
+        &self.input[self.span()]
+    }
 }
 
-fn import<'a, I: Input<'a>>() -> impl Parser<'a, I, Import> {
-    let import = recursive(|import| {
-        let options = just(AsKw)
-            .ignore_then(ident())
-            .map(ImportOptions::Rename)
-            .or(import
-                .clone()
-                .map(|import| ImportOptions::Child(Box::new(import))));
+fn file(p: &mut Parser<'_>) -> File {
+    let mut functions = Vec::new();
 
-        let tree = ident()
-            .then(just(Dot).ignore_then(options).or_not())
-            .map(|(name, options)| Import::Tree(ImportTree { name, options }));
+    while !p.at(Eof) {
+        if p.at(Fn) {
+            functions.push(function(p));
+        } else {
+            p.expect_or_recover(Fn, &[Fn]);
+        }
+    }
 
-        let group = import
-            .separated_by(just(Comma))
-            .allow_trailing()
-            .collect()
-            .delimited_by(just(LeftBrace), just(RightBrace))
-            .map(Import::Group);
-
-        let wildcard = just(Star).to(Import::Wildcard);
-
-        choice((tree, group, wildcard))
-    });
-
-    just(ImportKw)
-        .ignore_then(import)
-        .then_ignore(just(Semicolon))
+    File(functions)
 }
 
-fn type_alias<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeAlias> {
-    just(TypeKw)
-        .ignore_then(type_expr())
-        .then_ignore(just(Equals))
-        .then(type_expr())
-        .then_ignore(just(Semicolon))
-        .map(|(lhs, rhs)| TypeAlias { lhs, rhs })
-}
-
-fn r#struct<'a, I: Input<'a>>() -> impl Parser<'a, I, Struct> {
-    just(StructKw)
-        .ignore_then(type_expr())
-        .then(variant(type_expr()))
-        .then(just(Semicolon).or_not())
-        .try_map(|((ty, body), semicolon), span| {
-            if matches!(body, Variant::Unit | Variant::Tuple(_)) && semicolon.is_none() {
-                Err(Rich::custom(
-                    span,
-                    "struct variant requires a semicolon: ';'",
-                ))
-            } else {
-                Ok(Struct { ty, body })
+fn r#type(p: &mut Parser<'_>) -> Type {
+    match p.peek() {
+        IntTy => {
+            p.next();
+            Type::Int
+        }
+        BoolTy => {
+            p.next();
+            Type::Bool
+        }
+        Fn => {
+            p.next();
+            let params = delimited_list(p, LeftParen, RightParen, Comma, r#type);
+            let return_ty = p.consume(Arrow).then(|| Box::new(r#type(p)));
+            Type::Function {
+                params,
+                return_type: return_ty,
             }
+        }
+        VoidTy => {
+            p.next();
+            Type::Void
+        }
+
+        _ => {
+            p.error(&[IntTy, BoolTy, Fn, VoidTy]);
+            Type::ParseError
+        }
+    }
+}
+
+fn function(p: &mut Parser<'_>) -> Function {
+    p.expect(Fn);
+    let name = ident(p);
+
+    let params = delimited_list(p, LeftParen, RightParen, Comma, |p| {
+        let name = ident(p);
+        p.expect_or_recover(Colon, &[Comma, RightParen, Arrow, LeftBrace]);
+        let ty = r#type(p);
+        (name, ty)
+    });
+
+    let return_ty = p.consume(Arrow).then(|| r#type(p));
+
+    let body = block(p);
+
+    Function {
+        name,
+        params,
+        return_type: return_ty,
+        body,
+    }
+}
+
+fn block(p: &mut Parser<'_>) -> Block {
+    p.expect(LeftBrace);
+
+    let mut stmts = Vec::new();
+    let mut functions = Vec::new();
+    let mut tail = None;
+    while !p.at(RightBrace) && !p.at(Eof) {
+        if let Let | Break | Continue | Return = p.peek() {
+            stmts.push(stmt(p));
+        } else if let Fn = p.peek() {
+            functions.push(function(p));
+        } else {
+            let expr = expr(p);
+            if p.consume(Semicolon) {
+                stmts.push(Stmt::Expr(expr));
+            } else {
+                tail = Some(Box::new(expr));
+                break;
+            }
+        }
+    }
+
+    p.expect(RightBrace);
+    Block {
+        stmts,
+        functions,
+        tail,
+    }
+}
+
+fn stmt(p: &mut Parser<'_>) -> Stmt {
+    match p.peek() {
+        Let => {
+            p.next();
+
+            let name = ident(p);
+            let ty = p.consume(Colon).then(|| r#type(p));
+            p.expect_or_recover(Equals, &[Semicolon]);
+            let value = expr(p);
+
+            p.expect(Semicolon);
+            Stmt::Let {
+                name,
+                r#type: ty,
+                value,
+            }
+        }
+        Break => {
+            p.next();
+            p.expect(Semicolon);
+            Stmt::Break
+        }
+        Continue => {
+            p.next();
+            p.expect(Semicolon);
+            Stmt::Continue
+        }
+        Return => {
+            p.next();
+            let value = (!p.at(Semicolon)).then(|| expr(p));
+            p.expect(Semicolon);
+            Stmt::Return(value)
+        }
+        _ => {
+            let expr = expr(p);
+            if expr.is_inline() {
+                p.expect(Semicolon);
+            }
+            Stmt::Expr(expr)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct BindingPower(u8);
+
+impl BindingPower {
+    const MIN: Self = BindingPower(u8::MIN);
+    const MAX: Self = BindingPower(u8::MAX);
+
+    fn of(op: Token) -> Option<(Self, Self)> {
+        const ASSIGNMENT: &[Token] = &[Equals];
+
+        let bp = [
+            ASSIGNMENT,
+            &[LogicOr],
+            &[LogicAnd],
+            &[Eq, Ne, Lt, Le, Gt, Ge],
+            &[Plus, Minus],
+            &[Star, Slash, Percent],
+        ]
+        .iter()
+        .position(|level| level.contains(&op))
+        .map(|bp| bp as u8 * 2)?;
+
+        Some(if ASSIGNMENT.contains(&op) {
+            (BindingPower(bp + 2), BindingPower(bp + 1))
+        } else {
+            (BindingPower(bp + 1), BindingPower(bp + 2))
         })
+    }
 }
 
-fn r#enum<'a, I: Input<'a>>() -> impl Parser<'a, I, Enum> {
-    just(EnumKw)
-        .ignore_then(type_expr())
-        .then(
-            ident()
-                .then(variant(type_expr()))
-                .separated_by(just(Comma))
-                .allow_trailing()
-                .collect()
-                .delimited_by(just(LeftBrace), just(LeftBrace)),
-        )
-        .map(|(ty, variants)| Enum { ty, variants })
+fn expr(p: &mut Parser<'_>) -> Expr {
+    expr_rec(p, BindingPower::MIN)
 }
 
-fn variant<'a, I: Input<'a>, T>(p: impl Parser<'a, I, T>) -> impl Parser<'a, I, Variant<T>> {
-    let tuple = p
-        .clone()
-        .separated_by(just(Comma))
-        .allow_trailing()
-        .collect()
-        .delimited_by(just(LeftParen), just(RightParen))
-        .map(Variant::Tuple);
+fn expr_rec(p: &mut Parser<'_>, min: BindingPower) -> Expr {
+    let mut lhs = match p.peek() {
+        LeftBrace => Expr::Block(block(p)),
+        If => {
+            fn r#if(p: &mut Parser<'_>) -> ExprIf {
+                p.expect(If);
 
-    let record = ident()
-        .then_ignore(just(Colon))
-        .then(p)
-        .separated_by(just(Comma))
-        .allow_trailing()
-        .collect()
-        .delimited_by(just(LeftBrace), just(RightBrace))
-        .map(Variant::Record);
+                let condition = Box::new(expr(p));
+                let then = block(p);
 
-    tuple
-        .or(record)
-        .or_not()
-        .map(|variant| variant.unwrap_or(Variant::Unit))
+                let r#else = p.consume(Else).then(|| {
+                    if p.at(If) {
+                        ExprElse::If(Box::new(r#if(p)))
+                    } else {
+                        ExprElse::Block(block(p))
+                    }
+                });
+
+                ExprIf {
+                    condition,
+                    then,
+                    r#else,
+                }
+            }
+
+            Expr::If(r#if(p))
+        }
+        Loop => {
+            p.next();
+            Expr::Loop(block(p))
+        }
+        While => {
+            p.next();
+            let condition = Box::new(expr(p));
+            let body = block(p);
+            Expr::While { condition, body }
+        }
+        op @ (Not | Minus) => {
+            p.next();
+            Expr::Prefix {
+                op: op.into(),
+                expr: Box::new(expr_rec(p, BindingPower::MAX)),
+            }
+        }
+        LeftParen => Expr::Paren(Box::new(delimited_by(p, LeftParen, RightParen, expr))),
+        Int => {
+            p.next();
+            Expr::Int(p.text().parse().unwrap())
+        }
+        True => {
+            p.next();
+            Expr::Bool(true)
+        }
+        False => {
+            p.next();
+            Expr::Bool(false)
+        }
+        Ident => Expr::Ident(ident(p)),
+        _ => {
+            p.error(&[Int]);
+            return Expr::ParseError;
+        }
+    };
+
+    loop {
+        if p.at(LeftParen) {
+            lhs = Expr::Call {
+                function: Box::new(lhs),
+                args: delimited_list(p, LeftParen, RightParen, Comma, expr),
+            };
+        } else if let Some((l, r)) = BindingPower::of(p.peek()) {
+            if l < min {
+                break;
+            }
+
+            let op = p.next().into();
+            let rhs = expr_rec(p, r);
+            lhs = Expr::Infix {
+                lhs: Box::new(lhs),
+                op,
+                rhs: Box::new(rhs),
+            };
+        } else {
+            break;
+        }
+    }
+
+    lhs
 }
 
-fn type_expr<'a, I: Input<'a>>() -> impl Parser<'a, I, TypeExpr> {
-    recursive(|type_expr| {
-        let primitive = select! {
-            IntTy => TypeExpr::Int,
-            FloatTy => TypeExpr::Float,
-            BoolTy => TypeExpr::Bool,
-            StringTy => TypeExpr::String,
-            CharTy => TypeExpr::Char
-        };
-
-        let type_expr_list = type_expr
-            .clone()
-            .separated_by(just(Comma))
-            .allow_leading()
-            .collect();
-
-        let tuple = type_expr_list
-            .clone()
-            .delimited_by(just(LeftParen), just(RightParen))
-            .map(TypeExpr::Tuple);
-
-        let array = type_expr
-            .clone()
-            .then(
-                just(Semicolon)
-                    .ignore_then(select! { Int(i) => i })
-                    .or_not(),
-            )
-            .delimited_by(just(LeftBracket), just(RightBracket))
-            .map(|(ty, len)| TypeExpr::Array {
-                ty: Box::new(ty),
-                len: len.map(|len| len as usize),
-            });
-
-        let function = just(FnKw)
-            .ignore_then(
-                type_expr_list
-                    .clone()
-                    .delimited_by(just(LeftParen), just(RightParen)),
-            )
-            .then(
-                just(Arrow)
-                    .ignore_then(type_expr.clone().map(Box::new))
-                    .or_not(),
-            )
-            .map(|(params, return_ty)| TypeExpr::Function { params, return_ty });
-
-        let named = {
-            let generics = type_expr_list
-                .clone()
-                .delimited_by(just(LeftBracket), just(RightBracket));
-
-            path()
-                .then(generics.or_not())
-                .map(|(path, generics)| TypeExpr::Named { path, generics })
-        };
-
-        choice((primitive, tuple, array, function, named))
-    })
+fn ident(p: &mut Parser<'_>) -> Intern<str> {
+    p.expect(Token::Ident);
+    Intern::from(p.text())
 }
 
-fn path<'a, I: Input<'a>>() -> impl Parser<'a, I, Path> {
-    ident()
-        .separated_by(just(Dot))
-        .at_least(1)
-        .collect()
-        .map(|components| Path { components })
+fn delimited_list<T>(
+    p: &mut Parser<'_>,
+    l: Token,
+    r: Token,
+    separator: Token,
+    f: impl FnMut(&mut Parser<'_>) -> T,
+) -> Vec<T> {
+    delimited_by(p, l, r, |p| separated_by(p, separator, r, f))
 }
 
-fn ident<'a, I: Input<'a>>() -> impl Parser<'a, I, Intern<str>> {
-    select! { Ident(i) => i }
+fn separated_by<T>(
+    p: &mut Parser<'_>,
+    separator: Token,
+    end: Token,
+    mut f: impl FnMut(&mut Parser<'_>) -> T,
+) -> Vec<T> {
+    if p.at(end) || p.at(Eof) {
+        return Vec::new();
+    }
+
+    let mut values = vec![f(p)];
+
+    while p.consume(separator) && !p.at(end) && !p.at(Eof) {
+        values.push(f(p));
+    }
+
+    values
+}
+
+fn delimited_by<T>(
+    p: &mut Parser<'_>,
+    l: Token,
+    r: Token,
+    f: impl FnOnce(&mut Parser<'_>) -> T,
+) -> T {
+    p.expect(l);
+    let value = f(p);
+    p.expect(r);
+    value
 }
