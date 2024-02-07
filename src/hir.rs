@@ -45,6 +45,7 @@ impl Resolvable for Ref {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Module {
+    name: Ident,
     functions: Vec<FunctionId>,
 }
 
