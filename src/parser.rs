@@ -1,5 +1,4 @@
 use ariadne::{Color, Label, Report, ReportKind};
-use internment::Intern;
 
 use crate::{
     ast::*,
@@ -393,9 +392,9 @@ fn expr_rec(p: &mut Parser<'_>, min: BindingPower) -> Expr {
     lhs
 }
 
-fn ident(p: &mut Parser<'_>) -> Intern<str> {
+fn ident(p: &mut Parser<'_>) -> crate::ast::Ident {
     p.expect(Token::Ident);
-    Intern::from(p.text())
+    p.text().into()
 }
 
 fn delimited_list<T>(

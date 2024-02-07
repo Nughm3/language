@@ -1,5 +1,4 @@
 use ariadne::{Report, ReportKind};
-use internment::Intern;
 
 use super::{resolve::*, Node};
 use crate::{ast, hir, span::Span};
@@ -25,7 +24,7 @@ impl Resolver {
         self.late_exprs.clear();
     }
 
-    fn late_bind(&mut self, name: Intern<str>) -> Result<hir::Ref, AlreadyBound> {
+    fn late_bind(&mut self, name: ast::Ident) -> Result<hir::Ref, AlreadyBound> {
         let r#ref = hir::Ref::Late(self.late_bindings.len());
         self.values.bind(name, r#ref)?;
         self.late_bindings.push(r#ref);
@@ -54,9 +53,9 @@ impl<'a> Builder<'a> {
         }
     }
 
-    pub fn lower(&mut self, file: ast::File) -> hir::ModuleId {
+    pub fn lower(&mut self, name: ast::Ident, file: ast::File) -> hir::ModuleId {
         self.resolver.reset();
-        let id = self.file(file);
+        let id = self.file(name, file);
 
         for expr in self.resolver.late_exprs.iter() {
             let hir::Expr::Ref(r#ref) = &mut self.hir[*expr] else {
@@ -77,7 +76,7 @@ impl<'a> Builder<'a> {
         node.alloc(&mut self.hir)
     }
 
-    fn file(&mut self, ast::File(functions): ast::File) -> hir::ModuleId {
+    fn file(&mut self, name: ast::Ident, ast::File(functions): ast::File) -> hir::ModuleId {
         self.resolver.values.scope(Scope::new());
 
         let mut function_bindings = Vec::with_capacity(functions.len());
@@ -105,7 +104,7 @@ impl<'a> Builder<'a> {
             .collect();
 
         self.resolver.values.unscope();
-        self.create_node(hir::Module { functions })
+        self.create_node(hir::Module { name, functions })
     }
 
     fn function(

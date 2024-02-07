@@ -1,3 +1,5 @@
+use std::{fmt, ops::Deref};
+
 use internment::Intern;
 
 use crate::token::Token;
@@ -20,8 +22,8 @@ pub enum Type {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Function {
-    pub name: Intern<str>,
-    pub params: Vec<(Intern<str>, Type)>,
+    pub name: Ident,
+    pub params: Vec<(Ident, Type)>,
     pub return_type: Option<Type>,
     pub body: Block,
 }
@@ -37,7 +39,7 @@ pub struct Block {
 pub enum Stmt {
     Expr(Expr),
     Let {
-        name: Intern<str>,
+        name: Ident,
         r#type: Option<Type>,
         value: Expr,
     },
@@ -73,7 +75,7 @@ pub enum Expr {
 
     Int(u64),
     Bool(bool),
-    Ident(Intern<str>),
+    Ident(Ident),
 
     ParseError,
 }
@@ -104,6 +106,35 @@ pub struct ExprIf {
 pub enum ExprElse {
     If(Box<ExprIf>),
     Block(Block),
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct Ident(Intern<str>);
+
+impl<T: Into<Intern<str>>> From<T> for Ident {
+    fn from(s: T) -> Self {
+        Ident(s.into())
+    }
+}
+
+impl fmt::Debug for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.0.as_ref())
+    }
+}
+
+impl fmt::Display for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl Deref for Ident {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]

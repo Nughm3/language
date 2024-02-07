@@ -1,5 +1,6 @@
 use ahash::{HashMap, HashMapExt};
-use internment::Intern;
+
+use crate::ast::Ident;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Env<T> {
@@ -38,7 +39,7 @@ impl<T: Resolvable> Env<T> {
         }
     }
 
-    pub fn bind(&mut self, name: Intern<str>, value: T) -> Result<(), AlreadyBound> {
+    pub fn bind(&mut self, name: Ident, value: T) -> Result<(), AlreadyBound> {
         if self
             .scopes
             .last_mut()
@@ -53,7 +54,7 @@ impl<T: Resolvable> Env<T> {
         }
     }
 
-    pub fn resolve(&mut self, name: Intern<str>) -> Option<&T> {
+    pub fn resolve(&mut self, name: Ident) -> Option<&T> {
         let mut transparent = true;
 
         for scope in self.scopes.iter().rev() {
@@ -72,7 +73,7 @@ impl<T: Resolvable> Env<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope<T> {
-    map: HashMap<Intern<str>, T>,
+    map: HashMap<Ident, T>,
     subscope: bool,
     transparent: bool,
 }

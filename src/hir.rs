@@ -1,10 +1,9 @@
 use std::ops::{Index, IndexMut};
 
 use id_arena::{Arena, Id};
-use internment::Intern;
 
 use self::{lower::Builder, resolve::Resolvable};
-use crate::ast::{InfixOp, PrefixOp};
+use crate::ast::{Ident, InfixOp, PrefixOp};
 
 mod lower;
 mod resolve;
@@ -62,7 +61,7 @@ pub enum Type {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Function {
-    pub name: Intern<str>,
+    pub name: Ident,
     pub signature: Type,
     pub body: BlockId,
 }
@@ -85,7 +84,7 @@ pub enum Stmt {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Binding {
-    pub name: Intern<str>,
+    pub name: Ident,
     pub r#type: Option<Type>,
     pub value: ExprId,
 }

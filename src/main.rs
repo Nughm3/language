@@ -56,7 +56,7 @@ fn run(input: &str) {
     dbg!(&ast);
 
     let mut builder = Hir::builder();
-    builder.lower(ast);
+    builder.lower("input".into(), ast);
     let hir = match builder.finish() {
         Ok(hir) => hir,
         Err(errors) => {
@@ -65,7 +65,7 @@ fn run(input: &str) {
         }
     };
 
-    dbg!(&hir);
+    println!("{hir:#?}");
 }
 
 fn report<'a>(input: &'a str, errors: Vec<Report<'a, Span>>) {
