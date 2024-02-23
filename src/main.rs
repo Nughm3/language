@@ -8,10 +8,9 @@ use ariadne::{Report, Source};
 use language::{hir::Hir, parser::parse, span::Span, types::TypeTable};
 
 // TODO:
-// - Parser & typechecker resilience
-// - Type inference & checking
-// - Type check module by module so compilation can continue
-// - Interning of types
+// - Parser resilience
+// - Type checking: identify which modules succeeded so they can continue to be compiled
+// - Interning of types & string interner
 // - HIR & type table formatting
 // - Code generation
 

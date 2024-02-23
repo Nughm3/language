@@ -36,7 +36,7 @@ impl Context {
 
             (a, b) => {
                 if a != b {
-                    return Err(TypeError::Mismatch(a.clone(), b.clone()));
+                    return Err(TypeError::Mismatch(a, b));
                 }
             }
         }
