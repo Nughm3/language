@@ -5,12 +5,15 @@ use std::{
 };
 
 use ariadne::{Report, Source};
-use language::{hir::Hir, parser::parse, span::Span};
+use language::{hir::Hir, parser::parse, span::Span, types::TypeTable};
 
 // TODO:
+// - Parser & typechecker resilience
 // - Type inference & checking
+// - Type check module by module so compilation can continue
+// - Interning of types
+// - HIR & type table formatting
 // - Code generation
-// - Parser resilience
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -65,7 +68,11 @@ fn run(input: &str) {
         }
     };
 
-    println!("{hir:#?}");
+    dbg!(&hir);
+
+    let types = TypeTable::typecheck(&hir).expect("type error");
+
+    dbg!(&types);
 }
 
 fn report<'a>(input: &'a str, errors: Vec<Report<'a, Span>>) {

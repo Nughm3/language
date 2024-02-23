@@ -141,7 +141,7 @@ fn file(p: &mut Parser<'_>) -> File {
     File(functions)
 }
 
-fn r#type(p: &mut Parser<'_>) -> Type {
+fn ty(p: &mut Parser<'_>) -> Type {
     match p.peek() {
         IntTy => {
             p.next();
@@ -153,8 +153,8 @@ fn r#type(p: &mut Parser<'_>) -> Type {
         }
         Fn => {
             p.next();
-            let params = delimited_list(p, LeftParen, RightParen, Comma, r#type);
-            let return_ty = p.consume(Arrow).then(|| Box::new(r#type(p)));
+            let params = delimited_list(p, LeftParen, RightParen, Comma, ty);
+            let return_ty = p.consume(Arrow).then(|| Box::new(ty(p)));
             Type::Function {
                 params,
                 return_type: return_ty,
@@ -179,11 +179,11 @@ fn function(p: &mut Parser<'_>) -> Function {
     let params = delimited_list(p, LeftParen, RightParen, Comma, |p| {
         let name = ident(p);
         p.expect_or_recover(Colon, &[Comma, RightParen, Arrow, LeftBrace]);
-        let ty = r#type(p);
+        let ty = ty(p);
         (name, ty)
     });
 
-    let return_ty = p.consume(Arrow).then(|| r#type(p));
+    let return_ty = p.consume(Arrow).then(|| ty(p));
 
     let body = block(p);
 
@@ -231,16 +231,12 @@ fn stmt(p: &mut Parser<'_>) -> Stmt {
             p.next();
 
             let name = ident(p);
-            let ty = p.consume(Colon).then(|| r#type(p));
+            let ty = p.consume(Colon).then(|| ty(p));
             p.expect_or_recover(Equals, &[Semicolon]);
             let value = expr(p);
 
             p.expect(Semicolon);
-            Stmt::Let {
-                name,
-                r#type: ty,
-                value,
-            }
+            Stmt::Let { name, ty, value }
         }
         Break => {
             p.next();

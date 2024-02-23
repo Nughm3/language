@@ -8,16 +8,14 @@ use crate::ast::{Ident, InfixOp, PrefixOp};
 mod lower;
 mod resolve;
 
-// TODO: HIR formatting
-
 #[derive(Debug, Default)]
 pub struct Hir {
-    modules: Arena<Module>,
-    functions: Arena<Function>,
-    blocks: Arena<Block>,
-    stmts: Arena<Stmt>,
-    bindings: Arena<Binding>,
-    exprs: Arena<Expr>,
+    pub modules: Arena<Module>,
+    pub functions: Arena<Function>,
+    pub blocks: Arena<Block>,
+    pub stmts: Arena<Stmt>,
+    pub bindings: Arena<Binding>,
+    pub exprs: Arena<Expr>,
 }
 
 impl Hir {
@@ -36,17 +34,17 @@ pub enum Ref {
     Error,
 }
 
-// NOTE (invariant): only functions are late bound, so they don't need to be restricted
 impl Resolvable for Ref {
     fn restricted(&self) -> bool {
+        // NOTE (invariant): only functions are late bound, so they don't need to be restricted
         matches!(self, Ref::Local(_) | Ref::Param(_))
     }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Module {
-    name: Ident,
-    functions: Vec<FunctionId>,
+    pub name: Ident,
+    pub functions: Vec<FunctionId>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -86,7 +84,7 @@ pub enum Stmt {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Binding {
     pub name: Ident,
-    pub r#type: Option<Type>,
+    pub ty: Option<Type>,
     pub value: ExprId,
 }
 

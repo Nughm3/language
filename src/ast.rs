@@ -40,7 +40,7 @@ pub enum Stmt {
     Expr(Expr),
     Let {
         name: Ident,
-        r#type: Option<Type>,
+        ty: Option<Type>,
         value: Expr,
     },
     Break,

@@ -189,14 +189,10 @@ impl<'a> Builder<'a> {
     fn stmt(&mut self, stmt: ast::Stmt) -> hir::StmtId {
         let stmt = match stmt {
             ast::Stmt::Expr(expr) => hir::Stmt::Expr(self.expr(expr)),
-            ast::Stmt::Let {
-                name,
-                r#type: ty,
-                value,
-            } => {
+            ast::Stmt::Let { name, ty, value } => {
                 let binding = hir::Binding {
                     name,
-                    r#type: ty.map(r#type),
+                    ty: ty.map(r#type),
                     value: self.expr(value),
                 };
 
