@@ -1,112 +1,106 @@
-use std::ops::Index;
-
 use ahash::{HashMap, HashMapExt};
 
-use super::*;
+use super::{
+    context::{Context, TypeInfo, Var},
+    TypeError, TypeResult, Types,
+};
 use crate::{
     ast::{InfixOp, PrefixOp},
     hir,
 };
 
 #[derive(Debug)]
-pub struct TypeTable {
-    types: Vec<Type>,
-    functions: HashMap<hir::FunctionId, TypeId>,
-    bindings: HashMap<hir::BindingId, TypeId>,
-    exprs: HashMap<hir::ExprId, TypeId>,
-}
-
-impl TypeTable {
-    pub fn typecheck(hir: &hir::Hir) -> Result<Self, Vec<TypeError>> {
-        let mut checker = TypeChecker {
-            hir,
-            ctx: context::Context::new(),
-            current_function: None,
-            function_stack: Vec::new(),
-            table: TypeTable {
-                types: Vec::new(),
-                functions: HashMap::new(),
-                bindings: HashMap::new(),
-                exprs: HashMap::new(),
-            },
-        };
-
-        let mut errors = Vec::new();
-        for (id, _) in hir.modules.iter() {
-            if let Err(mut e) = checker.module(id) {
-                errors.append(&mut e);
-            }
-        }
-
-        match checker.ctx.finish() {
-            Ok(types) => {
-                checker.table.types = types;
-                Ok(checker.table)
-            }
-            Err(e) => {
-                errors.push(e);
-                Err(errors)
-            }
-        }
-    }
-}
-
-impl Index<hir::FunctionId> for TypeTable {
-    type Output = Type;
-
-    fn index(&self, id: hir::FunctionId) -> &Self::Output {
-        &self.types[self.functions[&id].index()]
-    }
-}
-
-impl Index<hir::BindingId> for TypeTable {
-    type Output = Type;
-
-    fn index(&self, id: hir::BindingId) -> &Self::Output {
-        &self.types[self.bindings[&id].index()]
-    }
-}
-
-impl Index<hir::ExprId> for TypeTable {
-    type Output = Type;
-
-    fn index(&self, id: hir::ExprId) -> &Self::Output {
-        &self.types[self.exprs[&id].index()]
-    }
-}
-
-#[derive(Debug)]
-struct TypeChecker<'a> {
+pub struct TypeChecker<'a> {
     hir: &'a hir::Hir,
-    ctx: context::Context,
-    current_function: Option<(Vec<TypeId>, TypeId)>,
+    ctx: Context,
+    errors: Vec<TypeError>,
+
+    current_function: Option<(Vec<Var>, Var)>,
     function_stack: Vec<hir::FunctionId>,
-    table: TypeTable,
+
+    functions: HashMap<hir::FunctionId, Var>,
+    bindings: HashMap<hir::BindingId, Var>,
+    exprs: HashMap<hir::ExprId, Var>,
 }
 
 impl<'a> TypeChecker<'a> {
-    fn module(&mut self, id: hir::ModuleId) -> Result<(), Vec<TypeError>> {
-        let mut errors = Vec::new();
+    pub fn new(hir: &'a hir::Hir) -> Self {
+        TypeChecker {
+            hir,
+            ctx: Context::new(),
+            errors: Vec::new(),
+
+            current_function: None,
+            function_stack: Vec::new(),
+
+            functions: HashMap::new(),
+            bindings: HashMap::new(),
+            exprs: HashMap::new(),
+        }
+    }
+
+    pub fn check(&mut self) -> bool {
+        self.hir
+            .modules
+            .iter()
+            .map(|(id, _)| self.module(id))
+            .min()
+            .unwrap_or(true)
+
+        // for (f, ty) in &self.functions {
+        //     let f = &self.hir[f];
+        //     let ty = self.ctx.reconstruct(ty).unwrap();
+        //     println!("  function | {} : {ty:?}", f.name);
+        // }
+
+        // for (b, ty) in &self.bindings {
+        //     let b = &self.hir[b];
+        //     let ty = self.ctx.reconstruct(ty).unwrap();
+        //     println!("   binding | {} : {ty:?}", b.name);
+        // }
+
+        // for (e, ty) in &self.exprs {
+        //     let evalue = &self.hir[e];
+        //     let ty = self.ctx.reconstruct(ty).unwrap();
+        //     println!("      expr | #{} = {evalue:?} : {ty:?}", e.index());
+        // }
+    }
+
+    pub fn finish(mut self) -> Result<Types, Vec<TypeError>> {
+        if self.errors.is_empty() {
+            self.ctx.clear();
+            Ok(Types {
+                ctx: self.ctx,
+                functions: self.functions,
+                bindings: self.bindings,
+                exprs: self.exprs,
+            })
+        } else {
+            Err(self.errors)
+        }
+    }
+
+    fn module(&mut self, id: hir::ModuleId) -> bool {
+        let mut ok = true;
 
         for id in self.hir[id].functions.iter().copied() {
             match self.function(id) {
                 Ok(function_type) => {
-                    self.table.functions.insert(id, function_type);
+                    self.functions.insert(id, function_type);
                 }
-                Err(e) => errors.push(e),
+                Err(e) => {
+                    self.errors.push(e);
+                    ok = false;
+                }
             }
         }
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        ok
     }
 
-    fn function(&mut self, id: hir::FunctionId) -> TypeResult<TypeId> {
-        if let Some(ty) = self.table.functions.get(&id) {
-            return Ok(*ty);
+    fn function(&mut self, id: hir::FunctionId) -> TypeResult<Var> {
+        if let Some(id) = self.functions.get(&id) {
+            return Ok(*id);
         }
 
         let function = &self.hir[id];
@@ -119,7 +113,7 @@ impl<'a> TypeChecker<'a> {
             unreachable!("function signature must be function type");
         };
 
-        let params: Vec<TypeId> = params.iter().map(|ty| self.lower_type(ty)).collect();
+        let params: Vec<Var> = params.iter().map(|ty| self.lower_type(ty)).collect();
         let return_type = self.lower_type(return_type);
 
         let prev_signature = self.current_function.replace((params.clone(), return_type));
@@ -133,7 +127,7 @@ impl<'a> TypeChecker<'a> {
         Ok(self.ctx.insert(TypeInfo::Function(params, return_type)))
     }
 
-    fn block(&mut self, id: hir::BlockId) -> TypeResult<TypeId> {
+    fn block(&mut self, id: hir::BlockId) -> TypeResult<Var> {
         let hir::Block {
             functions,
             stmts,
@@ -143,7 +137,7 @@ impl<'a> TypeChecker<'a> {
         stmts.iter().try_for_each(|id| self.stmt(*id))?;
         functions.iter().try_for_each(|id| {
             let function_type = self.function(*id)?;
-            self.table.functions.insert(*id, function_type);
+            self.functions.insert(*id, function_type);
             Ok(())
         })?;
 
@@ -169,7 +163,7 @@ impl<'a> TypeChecker<'a> {
                     self.ctx.unify(value_type, annotation)?;
                 }
 
-                self.table.bindings.insert(*binding, value_type);
+                self.bindings.insert(*binding, value_type);
             }
             hir::Stmt::Return(Some(return_value)) => {
                 let return_type = self.expr(*return_value)?;
@@ -185,7 +179,10 @@ impl<'a> TypeChecker<'a> {
         Ok(())
     }
 
-    fn expr(&mut self, id: hir::ExprId) -> TypeResult<TypeId> {
+    fn expr(&mut self, id: hir::ExprId) -> TypeResult<Var> {
+        let bool_type = self.ctx.insert(TypeInfo::Bool);
+        let int_type = self.ctx.insert(TypeInfo::Int);
+
         let ty = match &self.hir[id] {
             hir::Expr::Block(block) => self.block(*block)?,
             hir::Expr::Decision {
@@ -215,9 +212,6 @@ impl<'a> TypeChecker<'a> {
             hir::Expr::Prefix { op, expr } => {
                 let expr = self.expr(*expr)?;
 
-                let bool_type = self.ctx.insert(TypeInfo::Bool);
-                let int_type = self.ctx.insert(TypeInfo::Int);
-
                 match op {
                     PrefixOp::Not => self.ctx.unify(expr, bool_type)?,
                     PrefixOp::Negate => self.ctx.unify(expr, int_type)?,
@@ -233,9 +227,6 @@ impl<'a> TypeChecker<'a> {
 
                     lhs
                 };
-
-                let bool_type = self.ctx.insert(TypeInfo::Bool);
-                let int_type = self.ctx.insert(TypeInfo::Int);
 
                 match op {
                     InfixOp::Add | InfixOp::Sub | InfixOp::Mul | InfixOp::Div | InfixOp::Rem => {
@@ -258,7 +249,7 @@ impl<'a> TypeChecker<'a> {
                 let expr_id = self.expr(*function)?;
 
                 let return_type = if let TypeInfo::Function(_, r) = self.ctx.get(expr_id) {
-                    *r
+                    r
                 } else {
                     return Err(TypeError::NotCallable);
                 };
@@ -284,7 +275,7 @@ impl<'a> TypeChecker<'a> {
                         .insert(TypeInfo::Function(params.clone(), *return_type)),
                     _ => self.function(function)?,
                 },
-                hir::Ref::Local(binding) => self.table.bindings[&binding],
+                hir::Ref::Local(binding) => self.bindings[&binding],
                 hir::Ref::Param(idx) => {
                     let (params, _) = self.current_function.as_ref().expect("not in a function");
                     params[idx]
@@ -294,11 +285,11 @@ impl<'a> TypeChecker<'a> {
             },
         };
 
-        self.table.exprs.insert(id, ty);
+        self.exprs.insert(id, ty);
         Ok(ty)
     }
 
-    fn lower_type(&mut self, ty: &hir::Type) -> TypeId {
+    fn lower_type(&mut self, ty: &hir::Type) -> Var {
         let ty = match ty {
             hir::Type::Int => TypeInfo::Int,
             hir::Type::Bool => TypeInfo::Bool,

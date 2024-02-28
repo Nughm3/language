@@ -1,10 +1,22 @@
-pub use check::TypeTable;
-use id_arena::Id;
+use ahash::HashMap;
+
+use self::context::{Context, Var};
+pub use self::{check::TypeChecker, context::Key};
+use crate::hir;
 
 mod check;
 mod context;
 
+pub type TypeResult<T> = Result<T, TypeError>;
+
 #[derive(Debug)]
+pub enum TypeError {
+    Mismatch(Key, Key),
+    NotCallable,
+    CannotInfer,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Type {
     Int,
     Bool,
@@ -12,23 +24,27 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
 }
 
-pub type TypeId = Id<TypeInfo>;
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum TypeInfo {
-    Unknown,
-    Eq(TypeId),
-    Int,
-    Bool,
-    Void,
-    Function(Vec<TypeId>, TypeId),
+#[derive(Debug, Clone)]
+pub struct Types {
+    ctx: Context,
+    functions: HashMap<hir::FunctionId, Var>,
+    bindings: HashMap<hir::BindingId, Var>,
+    exprs: HashMap<hir::ExprId, Var>,
 }
 
-pub type TypeResult<T> = Result<T, TypeError>;
+impl Types {
+    fn function(&self, id: hir::FunctionId) -> TypeResult<Type> {
+        let var = self.functions.get(&id).expect("not type checked");
+        self.ctx.reconstruct(*var)
+    }
 
-#[derive(Debug)]
-pub enum TypeError {
-    Mismatch(TypeInfo, TypeInfo),
-    NotCallable,
-    CannotInfer,
+    fn binding(&self, id: hir::BindingId) -> TypeResult<Type> {
+        let var = self.bindings.get(&id).expect("not type checked");
+        self.ctx.reconstruct(*var)
+    }
+
+    fn expr(&self, id: hir::ExprId) -> TypeResult<Type> {
+        let var = self.exprs.get(&id).expect("not type checked");
+        self.ctx.reconstruct(*var)
+    }
 }

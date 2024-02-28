@@ -213,71 +213,74 @@ impl<'a> Builder<'a> {
     }
 
     fn expr(&mut self, expr: ast::Expr) -> hir::ExprId {
-        impl Builder<'_> {
-            fn expr_rec(&mut self, expr: ast::Expr) -> hir::Expr {
-                match expr {
-                    ast::Expr::Block(block) => hir::Expr::Block(self.block(block)),
-                    ast::Expr::If(r#if) => {
-                        let mut decision = hir::Expr::Decision {
-                            conditions: Vec::with_capacity(1),
-                            branches: Vec::with_capacity(1),
-                            default: None,
-                        };
+        let expr = self.expr_rec(expr);
+        self.create_node(expr)
+    }
 
-                        self.r#if(r#if, &mut decision);
-                        decision
-                    }
-                    ast::Expr::Loop(body) => hir::Expr::Loop(self.block(body)),
-                    ast::Expr::While { condition, body } => {
-                        let body = self.block(body);
+    fn expr_rec(&mut self, expr: ast::Expr) -> hir::Expr {
+        match expr {
+            ast::Expr::Block(block) => hir::Expr::Block(self.block(block)),
+            ast::Expr::If(r#if) => {
+                let mut decision = hir::Expr::Decision {
+                    conditions: Vec::with_capacity(1),
+                    branches: Vec::with_capacity(1),
+                    default: None,
+                };
 
-                        if self.hir[body].tail.is_some() {
-                            self.errors.push(
+                self.r#if(r#if, &mut decision);
+                decision
+            }
+            ast::Expr::Loop(body) => hir::Expr::Loop(self.block(body)),
+            ast::Expr::While { condition, body } => {
+                let body = self.block(body);
+
+                if self.hir[body].tail.is_some() {
+                    self.errors.push(
                         Report::build(ReportKind::Error, (), 0) // TODO: span tracking
                             .with_message("'while' loop body cannot return values")
                             .finish(),
                     )
-                        } else {
-                            let branch = hir::Block {
-                                stmts: vec![self.create_node(hir::Stmt::Break)],
-                                ..Default::default()
-                            };
+                } else {
+                    let branch = hir::Block {
+                        stmts: vec![self.create_node(hir::Stmt::Break)],
+                        ..Default::default()
+                    };
 
-                            let expr = hir::Expr::Decision {
-                                conditions: vec![self.expr(*condition)],
-                                branches: { vec![self.create_node(branch)] },
-                                default: None,
-                            };
+                    let expr = hir::Expr::Decision {
+                        conditions: vec![self.expr(*condition)],
+                        branches: { vec![self.create_node(branch)] },
+                        default: None,
+                    };
 
-                            self.hir[body].tail = Some(self.create_node(expr));
-                        }
+                    self.hir[body].tail = Some(self.create_node(expr));
+                }
 
-                        hir::Expr::Loop(body)
-                    }
-                    ast::Expr::Prefix { op, expr } => hir::Expr::Prefix {
-                        op,
-                        expr: self.expr(*expr),
-                    },
-                    ast::Expr::Infix { lhs, op, rhs } => hir::Expr::Infix {
-                        lhs: self.expr(*lhs),
-                        op,
-                        rhs: self.expr(*rhs),
-                    },
-                    ast::Expr::Paren(expr) => self.expr_rec(*expr),
-                    ast::Expr::Call { function, args } => hir::Expr::Call {
-                        function: self.expr(*function),
-                        args: args.into_iter().map(|arg| self.expr(arg)).collect(),
-                    },
-                    ast::Expr::Int(int) => hir::Expr::Int(int),
-                    ast::Expr::Bool(bool) => hir::Expr::Bool(bool),
-                    ast::Expr::Ident(name) => {
-                        let r#ref =
-                            self.resolver
-                                .values
-                                .resolve(name)
-                                .copied()
-                                .unwrap_or_else(|| {
-                                    self.errors.push(
+                hir::Expr::Loop(body)
+            }
+            ast::Expr::Prefix { op, expr } => hir::Expr::Prefix {
+                op,
+                expr: self.expr(*expr),
+            },
+            ast::Expr::Infix { lhs, op, rhs } => hir::Expr::Infix {
+                lhs: self.expr(*lhs),
+                op,
+                rhs: self.expr(*rhs),
+            },
+            ast::Expr::Paren(expr) => self.expr_rec(*expr),
+            ast::Expr::Call { function, args } => hir::Expr::Call {
+                function: self.expr(*function),
+                args: args.into_iter().map(|arg| self.expr(arg)).collect(),
+            },
+            ast::Expr::Int(int) => hir::Expr::Int(int),
+            ast::Expr::Bool(bool) => hir::Expr::Bool(bool),
+            ast::Expr::Ident(name) => {
+                let r#ref = self
+                    .resolver
+                    .values
+                    .resolve(name)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        self.errors.push(
                                 Report::build(ReportKind::Error, (), 0) // TODO: span tracking
                                     .with_message(format_args!(
                                         "could not find '{name}' in this scope"
@@ -285,52 +288,47 @@ impl<'a> Builder<'a> {
                                     .finish(),
                             );
 
-                                    hir::Ref::Error
-                                });
+                        hir::Ref::Error
+                    });
 
-                        if let hir::Ref::Late(_) = r#ref {
-                            self.resolver.late_exprs.push(self.hir.exprs.next_id());
-                        }
-
-                        hir::Expr::Ref(r#ref)
-                    }
-                    ast::Expr::ParseError => {
-                        unreachable!("expression failed to parse but is being lowered into HIR")
-                    }
+                if let hir::Ref::Late(_) = r#ref {
+                    self.resolver.late_exprs.push(self.hir.exprs.next_id());
                 }
+
+                hir::Expr::Ref(r#ref)
             }
-
-            fn r#if(
-                &mut self,
-                ast::ExprIf {
-                    condition,
-                    then,
-                    r#else,
-                }: ast::ExprIf,
-                decision: &mut hir::Expr,
-            ) {
-                let hir::Expr::Decision {
-                    conditions,
-                    branches,
-                    default,
-                } = decision
-                else {
-                    unreachable!()
-                };
-
-                conditions.push(self.expr(*condition));
-                branches.push(self.block(then));
-                if let Some(r#else) = r#else {
-                    match r#else {
-                        ast::ExprElse::If(r#if) => self.r#if(*r#if, decision),
-                        ast::ExprElse::Block(block) => *default = Some(self.block(block)),
-                    }
-                }
+            ast::Expr::ParseError => {
+                unreachable!("expression failed to parse but is being lowered into HIR")
             }
         }
+    }
 
-        let expr = self.expr_rec(expr);
-        self.create_node(expr)
+    fn r#if(
+        &mut self,
+        ast::ExprIf {
+            condition,
+            then,
+            r#else,
+        }: ast::ExprIf,
+        decision: &mut hir::Expr,
+    ) {
+        let hir::Expr::Decision {
+            conditions,
+            branches,
+            default,
+        } = decision
+        else {
+            unreachable!()
+        };
+
+        conditions.push(self.expr(*condition));
+        branches.push(self.block(then));
+        if let Some(r#else) = r#else {
+            match r#else {
+                ast::ExprElse::If(r#if) => self.r#if(*r#if, decision),
+                ast::ExprElse::Block(block) => *default = Some(self.block(block)),
+            }
+        }
     }
 }
 

@@ -5,12 +5,10 @@ use std::{
 };
 
 use ariadne::{Report, Source};
-use language::{hir::Hir, parser::parse, span::Span, types::TypeTable};
+use language::{hir::Hir, parser::parse, span::Span, types::TypeChecker};
 
 // TODO:
 // - Parser resilience
-// - Type checking: identify which modules succeeded so they can continue to be compiled
-// - Interning of types & string interner
 // - HIR & type table formatting
 // - Code generation
 
@@ -69,8 +67,9 @@ fn run(input: &str) {
 
     dbg!(&hir);
 
-    let types = TypeTable::typecheck(&hir).expect("type error");
-
+    let mut typechecker = TypeChecker::new(&hir);
+    typechecker.check();
+    let types = typechecker.finish().expect("type error");
     dbg!(&types);
 }
 
