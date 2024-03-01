@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ahash = "0.8.9"
+ahash = "0.8"
 ariadne = "0.4.0"
 id-arena = "2.2.1"
 internment = { version = "0.7.4", features = ["ahash"] }
