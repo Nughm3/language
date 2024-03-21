@@ -40,12 +40,21 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub fn check(&mut self) -> bool {
-        self.hir
-            .modules
-            .iter()
-            .map(|(id, _)| self.module(id))
-            .min()
-            .unwrap_or(true)
+        let mut ok = true;
+
+        for (id, _) in self.hir.functions.iter() {
+            match self.function(id) {
+                Ok(function_type) => {
+                    self.functions.insert(id, function_type);
+                }
+                Err(e) => {
+                    self.errors.push(e);
+                    ok = false;
+                }
+            }
+        }
+
+        ok
 
         // for (f, ty) in &self.functions {
         //     let f = &self.hir[f];
@@ -78,24 +87,6 @@ impl<'a> TypeChecker<'a> {
         } else {
             Err(self.errors)
         }
-    }
-
-    fn module(&mut self, id: hir::ModuleId) -> bool {
-        let mut ok = true;
-
-        for id in self.hir[id].functions.iter().copied() {
-            match self.function(id) {
-                Ok(function_type) => {
-                    self.functions.insert(id, function_type);
-                }
-                Err(e) => {
-                    self.errors.push(e);
-                    ok = false;
-                }
-            }
-        }
-
-        ok
     }
 
     fn function(&mut self, id: hir::FunctionId) -> TypeResult<Var> {

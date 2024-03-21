@@ -33,17 +33,17 @@ pub struct Types {
 }
 
 impl Types {
-    fn function(&self, id: hir::FunctionId) -> TypeResult<Type> {
+    pub fn function(&self, id: hir::FunctionId) -> TypeResult<Type> {
         let var = self.functions.get(&id).expect("not type checked");
         self.ctx.reconstruct(*var)
     }
 
-    fn binding(&self, id: hir::BindingId) -> TypeResult<Type> {
+    pub fn binding(&self, id: hir::BindingId) -> TypeResult<Type> {
         let var = self.bindings.get(&id).expect("not type checked");
         self.ctx.reconstruct(*var)
     }
 
-    fn expr(&self, id: hir::ExprId) -> TypeResult<Type> {
+    pub fn expr(&self, id: hir::ExprId) -> TypeResult<Type> {
         let var = self.exprs.get(&id).expect("not type checked");
         self.ctx.reconstruct(*var)
     }

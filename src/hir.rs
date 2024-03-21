@@ -10,7 +10,6 @@ mod resolve;
 
 #[derive(Debug, Default)]
 pub struct Hir {
-    pub modules: Arena<Module>,
     pub functions: Arena<Function>,
     pub blocks: Arena<Block>,
     pub stmts: Arena<Stmt>,
@@ -39,12 +38,6 @@ impl Resolvable for Ref {
         // NOTE (invariant): only functions are late bound, so they don't need to be restricted
         matches!(self, Ref::Local(_) | Ref::Param(_))
     }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Module {
-    pub name: Ident,
-    pub functions: Vec<FunctionId>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -151,7 +144,6 @@ macro_rules! id {
     };
 }
 
-id!(Module, ModuleId, modules);
 id!(Function, FunctionId, functions);
 id!(Block, BlockId, blocks);
 id!(Stmt, StmtId, stmts);

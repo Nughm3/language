@@ -53,9 +53,9 @@ impl<'a> Builder<'a> {
         }
     }
 
-    pub fn lower(&mut self, name: ast::Ident, file: ast::File) -> hir::ModuleId {
+    pub fn lower(&mut self, file: ast::File) {
         self.resolver.reset();
-        let id = self.file(name, file);
+        self.file(file);
 
         for expr in self.resolver.late_exprs.iter() {
             let hir::Expr::Ref(r#ref) = &mut self.hir[*expr] else {
@@ -68,15 +68,13 @@ impl<'a> Builder<'a> {
 
             *r#ref = self.resolver.late_bindings[*idx];
         }
-
-        id
     }
 
     fn create_node<N: Node>(&mut self, node: N) -> N::Id {
         node.alloc(&mut self.hir)
     }
 
-    fn file(&mut self, name: ast::Ident, ast::File(functions): ast::File) -> hir::ModuleId {
+    fn file(&mut self, ast::File(functions): ast::File) {
         self.resolver.values.scope(Scope::new());
 
         let mut function_bindings = Vec::with_capacity(functions.len());
@@ -94,17 +92,13 @@ impl<'a> Builder<'a> {
             }
         }
 
-        let functions = std::iter::zip(functions, function_bindings)
-            .map(|(function, r#ref)| {
-                let function_id = self.function(function);
-                self.resolver
-                    .late_finish(r#ref, hir::Ref::Function(function_id));
-                function_id
-            })
-            .collect();
+        for (function, r#ref) in std::iter::zip(functions, function_bindings) {
+            let function_id = self.function(function);
+            self.resolver
+                .late_finish(r#ref, hir::Ref::Function(function_id));
+        }
 
         self.resolver.values.unscope();
-        self.create_node(hir::Module { name, functions })
     }
 
     fn function(

@@ -56,7 +56,7 @@ fn run(input: &str) {
     dbg!(&ast);
 
     let mut builder = Hir::builder();
-    builder.lower("input".into(), ast);
+    builder.lower(ast);
     let hir = match builder.finish() {
         Ok(hir) => hir,
         Err(errors) => {
