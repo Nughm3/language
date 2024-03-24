@@ -5,7 +5,7 @@ use std::{
 };
 
 use ariadne::{Report, Source};
-use language::{hir::Hir, parser::parse, span::Span, types::TypeChecker};
+use language::{eval::Interpreter, hir::Hir, parser::parse, span::Span, types::TypeChecker};
 
 // TODO:
 // - Parser resilience
@@ -71,6 +71,8 @@ fn run(input: &str) {
     typechecker.check();
     let types = typechecker.finish().expect("type error");
     dbg!(&types);
+
+    Interpreter::new(&hir).eval();
 }
 
 fn report<'a>(input: &'a str, errors: Vec<Report<'a, Span>>) {
